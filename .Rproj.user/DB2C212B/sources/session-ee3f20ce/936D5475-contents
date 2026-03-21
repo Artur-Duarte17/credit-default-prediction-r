@@ -1,0 +1,252 @@
+
+# ----------------------------------------------------------------------
+# 1) Pacotes e paralelismo
+# ----------------------------------------------------------------------
+if (!require(pacman)) install.packages("pacman")
+pacman::p_load(tidyverse, caret, randomForest, pROC, readxl, doParallel, knitr)
+
+n_cores <- max(1, detectCores() - 1)
+cl <- makeCluster(n_cores)
+registerDoParallel(cl)
+
+# ----------------------------------------------------------------------
+# 2) Download e leitura do dataset
+# ----------------------------------------------------------------------
+url <- "https://archive.ics.uci.edu/static/public/350/default+of+credit+card+clients.zip"
+temp_zip <- tempfile(fileext = ".zip")
+download.file(url, temp_zip, mode = "wb")
+
+tmp_dir <- tempdir()
+unzip(temp_zip, exdir = tmp_dir)
+
+xls_file <- list.files(
+  tmp_dir,
+  pattern = "default of credit card clients\\.xls$",
+  full.names = TRUE,
+  recursive = TRUE
+)[1]
+
+bd <- read_excel(xls_file, skip = 1)
+colnames(bd)[ncol(bd)] <- "Class"
+if ("ID" %in% names(bd)) bd$ID <- NULL
+
+# ----------------------------------------------------------------------
+# 3) Limpeza rápida + tratamento de variáveis categóricas
+# ----------------------------------------------------------------------
+bd$Class <- factor(bd$Class, levels = c(1, 0), labels = c("Deve", "Pago"))
+
+vars_cat <- c("SEX","EDUCATION","MARRIAGE","PAY_0","PAY_2","PAY_3","PAY_4","PAY_5","PAY_6")
+vars_cat <- vars_cat[vars_cat %in% names(bd)]
+bd[vars_cat] <- lapply(bd[vars_cat], as.factor)
+
+if ("EDUCATION" %in% names(bd)) {
+  bd$EDUCATION <- as.character(bd$EDUCATION)
+  bd$EDUCATION[bd$EDUCATION %in% c("0","5","6")] <- "4"
+  bd$EDUCATION <- factor(bd$EDUCATION)
+}
+
+if ("MARRIAGE" %in% names(bd)) {
+  bd$MARRIAGE <- as.character(bd$MARRIAGE)
+  bd$MARRIAGE[bd$MARRIAGE == "0"] <- "3"
+  bd$MARRIAGE <- factor(bd$MARRIAGE)
+}
+
+# ----------------------------------------------------------------------
+# 4) Split treino/teste (80/20 estratificado) + controle de validação
+# ----------------------------------------------------------------------
+set.seed(123)
+index <- createDataPartition(bd$Class, p = 0.80, list = FALSE)
+treino <- bd[index, ]
+teste  <- bd[-index, ]
+
+fitControl <- trainControl(
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  allowParallel = TRUE
+)
+
+# ----------------------------------------------------------------------
+# 5) Pré-filtro (apenas numéricas): NZV + correlação alta
+#    cria um treino_limpo para o RFE não perder tempo com redundância
+# ----------------------------------------------------------------------
+cols_num <- sapply(treino, is.numeric)
+dados_num <- treino[, cols_num, drop = FALSE]
+
+nzv <- nearZeroVar(dados_num, saveMetrics = TRUE)
+vars_nzv <- rownames(nzv)[nzv$nzv]
+
+if (length(vars_nzv) > 0) {
+  dados_num <- dados_num[, !names(dados_num) %in% vars_nzv, drop = FALSE]
+}
+
+cor_mat <- cor(dados_num)
+high_cor_idx <- findCorrelation(cor_mat, cutoff = 0.9)
+vars_cor <- if (length(high_cor_idx) > 0) names(dados_num)[high_cor_idx] else character(0)
+
+vars_remover <- c(vars_nzv, vars_cor)
+treino_limpo <- if (length(vars_remover) > 0) treino[, !names(treino) %in% vars_remover] else treino
+
+# ----------------------------------------------------------------------
+# 6) Seleção de variáveis: RFE guiado por ROC (AUC)
+# ----------------------------------------------------------------------
+bd$Class <- factor(bd$Class, levels = c("Deve", "Pago"))  # garante "Deve" como classe 1
+
+max_size <- ncol(treino_limpo) - 1
+sizes <- 1:max_size
+
+ctrl_rfe <- rfeControl(
+  functions = caretFuncs,
+  method = "cv",
+  number = 10,
+  allowParallel = TRUE
+)
+
+# o RFE precisa de um summary que crie ROC
+ctrl_rfe$functions$summary <- twoClassSummary
+
+# Mantém simples no RFE (mtry fixo = 1) só para selecionar variáveis.
+# O tuning pesado você já faz depois, no treino final com grid.
+grid_rfe <- expand.grid(mtry = 1)
+
+set.seed(123)
+rfe_result <- rfe(
+  x = treino_limpo[, setdiff(names(treino_limpo), "Class")],
+  y = treino_limpo$Class,
+  sizes = sizes,
+  rfeControl = ctrl_rfe,
+  method = "rf",
+  metric = "ROC",
+  trControl = fitControl,
+  tuneGrid = grid_rfe,
+  ntree = 50
+)
+
+top_vars <- predictors(rfe_result)
+
+res_rfe <- rfe_result$results
+png("Figura_RFE_ROC.png")
+plot(res_rfe$Variables, res_rfe$ROC,
+     type = "b",
+     xlab = "Número de variáveis",
+     ylab = "AUC (ROC)",
+     main = "RFE guiado por AUC (ROC)")
+dev.off()
+
+
+# ----------------------------------------------------------------------
+# 7) Treinamento dos modelos 
+#    A) Regressão logística (baseline)
+#    B) Random Forest (todas variáveis)
+#    C) Random Forest (apenas variáveis RFE-ROC)
+# ----------------------------------------------------------------------
+form_todas <- Class ~ .
+form_sel   <- as.formula(paste("Class ~", paste(top_vars, collapse = " + ")))
+
+set.seed(123)
+model_glm <- train(
+  form_todas,
+  data = treino,
+  method = "glm",
+  family = "binomial",
+  metric = "ROC",
+  trControl = fitControl
+)
+
+grid_full <- expand.grid(mtry = c(2, 4, 6, 8, 10))
+
+set.seed(123)
+model_rf_full <- train(
+  form_todas,
+  data = treino,
+  method = "rf",
+  metric = "ROC",
+  trControl = fitControl,
+  tuneGrid = grid_full,
+  ntree = 100
+)
+
+num_vars_sel <- length(top_vars)
+grid_sel <- expand.grid(mtry = 1:num_vars_sel)
+
+set.seed(123)
+model_rf_sel <- train(
+  form_sel,
+  data = treino,
+  method = "rf",
+  metric = "ROC",
+  trControl = fitControl,
+  tuneGrid = grid_sel,
+  ntree = 100
+)
+
+# ----------------------------------------------------------------------
+# 8) Avaliação no teste com LIMIAR (threshold) configurável
+# ----------------------------------------------------------------------
+extract_metrics <- function(model, test_data, metodo, selecao, threshold = 0.50) {
+  
+  probs <- predict(model, test_data, type = "prob")[, "Deve"]
+  
+  # aplica limiar: prob >= threshold => "Deve"
+  preds_thr <- ifelse(probs >= threshold, "Deve", "Pago")
+  preds_thr <- factor(preds_thr, levels = levels(test_data$Class))
+  
+  cm <- confusionMatrix(preds_thr, test_data$Class, positive = "Deve")
+  
+  roc_obj <- roc(
+    response  = test_data$Class,
+    predictor = probs,
+    levels = c("Pago", "Deve"),
+    direction = "<"
+  )
+  
+  data.frame(
+    Metodo = metodo,
+    Selecao_Variavel = selecao,
+    Limiar = sprintf("%.2f", threshold),
+    Sensibilidade = sprintf("%.2f%%", cm$byClass["Sensitivity"] * 100),
+    Especificidade = sprintf("%.2f%%", cm$byClass["Specificity"] * 100),
+    Acuracia = sprintf("%.2f%%", cm$overall["Accuracy"] * 100),
+    AUC = sprintf("%.3f", as.numeric(auc(roc_obj)))
+  )
+}
+
+# ----------------------------------------------------------------------
+# 9) Escolha de threshold no TREINO (KS/Youden) + comparação no TESTE_toggle
+# ----------------------------------------------------------------------
+choose_threshold_ks <- function(model, train_data) {
+  probs_tr <- predict(model, train_data, type = "prob")[, "Deve"]
+  
+  roc_tr <- roc(
+    response  = train_data$Class,
+    predictor = probs_tr,
+    levels = c("Pago", "Deve"),
+    direction = "<"
+  )
+  
+  # "best" com youden equivale ao ponto de maior (sens + esp - 1),
+  as.numeric(coords(roc_tr, x = "best", best.method = "youden", ret = "threshold"))
+}
+
+thr_glm     <- choose_threshold_ks(model_glm,     treino)
+thr_rf_full <- choose_threshold_ks(model_rf_full, treino)
+thr_rf_sel  <- choose_threshold_ks(model_rf_sel,  treino)
+
+tabela_final <- bind_rows(
+  # Limiar padrão 0.50
+  extract_metrics(model_glm,     teste, "Regressão Logística", "Não", threshold = 0.50),
+  extract_metrics(model_rf_full, teste, "Random Forest",       "Não", threshold = 0.50),
+  extract_metrics(model_rf_sel,  teste, "Random Forest", paste0("Sim (RFE-ROC: ", length(top_vars), " vars)"), threshold = 0.50),
+  
+  # Limiar “otimizado” no treino (KS/Youden)
+  extract_metrics(model_glm,     teste, "Regressão Logística", "Não (KS no treino)", threshold = thr_glm),
+  extract_metrics(model_rf_full, teste, "Random Forest",       "Não (KS no treino)", threshold = thr_rf_full),
+  extract_metrics(model_rf_sel,  teste, "Random Forest", paste0("Sim (RFE-ROC: ", length(top_vars), " vars; KS no treino)"), threshold = thr_rf_sel),
+  
+  # (Opcional) um cenário “agressivo” fixo pra discutir (ex.: 0.30)
+  extract_metrics(model_rf_sel,  teste, "Random Forest", paste0("Sim (RFE-ROC: ", length(top_vars), " vars)"), threshold = 0.30)
+)
+
+print(tabela_final)
+

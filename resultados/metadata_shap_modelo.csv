@@ -1,0 +1,2 @@
+Cenario,Modelo,Usa_SMOTENC,Threshold
+XGB_Top14_SemBalanceamento_Youden,XGBoost,FALSE,0.2164292111992836

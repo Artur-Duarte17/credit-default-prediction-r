@@ -1,0 +1,211 @@
+# ==============================================================================
+# 09_shap.R
+# Responsabilidade: gerar interpretabilidade SHAP do modelo vencedor
+# (RF Top-14 + SMOTENC + threshold Youden = 0.418).
+# ==============================================================================
+
+source("00_setup.R")
+
+# ------------------------------------------------------------------------------
+# BLOCO 1 — Carregar dados e definir variáveis do modelo vencedor
+# ------------------------------------------------------------------------------
+treino <- readRDS("objetos/treino.rds")
+teste  <- readRDS("objetos/teste.rds")
+ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+
+vars_top14 <- ranking_variaveis$Variavel_Original[1:14]
+
+treino_sub <- treino[, c(vars_top14, "Class")]
+teste_sub  <- teste[, c(vars_top14, "Class")]
+
+formula_sub <- as.formula(
+  paste("Class ~", paste(vars_top14, collapse = " + "))
+)
+
+threshold_final <- 0.418
+mtry_final <- 2
+
+print(vars_top14)
+
+# ------------------------------------------------------------------------------
+# BLOCO 2 — Reproduzir o cenário vencedor
+# ------------------------------------------------------------------------------
+receita_smotenc <- recipes::recipe(formula_sub, data = treino_sub) %>%
+  themis::step_smotenc(Class, over_ratio = 1, neighbors = 5, skip = TRUE)
+
+prep_smotenc <- recipes::prep(receita_smotenc, training = treino_sub, retain = TRUE)
+
+treino_smotenc <- recipes::juice(prep_smotenc)
+teste_proc     <- recipes::bake(prep_smotenc, new_data = teste_sub)
+
+print(dim(treino_smotenc))
+print(dim(teste_proc))
+
+set.seed(123)
+modelo_rf_final <- randomForest::randomForest(
+  formula_sub,
+  data = treino_smotenc,
+  mtry = mtry_final,
+  ntree = 200,
+  importance = TRUE
+)
+
+# ------------------------------------------------------------------------------
+# BLOCO 3 — Definir amostra para SHAP
+# ------------------------------------------------------------------------------
+set.seed(123)
+n_amostra_shap <- 200
+ids_amostra <- sample(seq_len(nrow(teste_proc)), size = n_amostra_shap)
+
+x_treino_bg  <- as.data.frame(treino_smotenc[, vars_top14])
+x_teste_shap <- as.data.frame(teste_proc[ids_amostra, vars_top14])
+y_teste_shap <- teste_proc$Class[ids_amostra]
+
+print(class(x_treino_bg))
+print(class(x_teste_shap))
+print(dim(x_treino_bg))
+print(dim(x_teste_shap))
+
+# ------------------------------------------------------------------------------
+# BLOCO 4 — Função de predição para o fastshap
+# ------------------------------------------------------------------------------
+pred_wrapper_rf <- function(object, newdata) {
+  newdata <- as.data.frame(newdata)
+  predict(object, newdata = newdata, type = "prob")[, "Deve"]
+}
+
+print(head(pred_wrapper_rf(modelo_rf_final, x_teste_shap)))
+
+# ------------------------------------------------------------------------------
+# BLOCO 5 — Calcular SHAP aproximado
+# ------------------------------------------------------------------------------
+set.seed(123)
+nsim_shap <- 30
+
+shap_raw <- fastshap::explain(
+  object = modelo_rf_final,
+  X = x_treino_bg,
+  pred_wrapper = pred_wrapper_rf,
+  newdata = x_teste_shap,
+  nsim = nsim_shap,
+  adjust = TRUE,
+  shap_only = FALSE
+)
+
+sv <- shapviz::shapviz(shap_raw)
+
+print(sv)
+
+# ------------------------------------------------------------------------------
+# BLOCO 6 — Importância global e tabela Top-10
+# ------------------------------------------------------------------------------
+matriz_shap <- shap_raw$shapley_values
+
+tabela_shap <- data.frame(
+  Variavel = colnames(matriz_shap),
+  Importancia_SHAP = colMeans(abs(matriz_shap))
+) %>%
+  dplyr::arrange(desc(Importancia_SHAP)) %>%
+  dplyr::mutate(Posicao = dplyr::row_number())
+
+print(tabela_shap)
+
+top10_shap <- tabela_shap %>%
+  dplyr::slice(1:10)
+
+print(top10_shap)
+
+# ------------------------------------------------------------------------------
+# BLOCO 7 — Gráficos SHAP
+# ------------------------------------------------------------------------------
+grafico_shap_importancia <- shapviz::sv_importance(
+  sv,
+  kind = "bar",
+  max_display = 10
+)
+
+print(grafico_shap_importancia)
+
+grafico_shap_bee <- shapviz::sv_importance(
+  sv,
+  kind = "bee",
+  max_display = 10
+)
+
+print(grafico_shap_bee)
+
+grafico_dependencia_pay0 <- shapviz::sv_dependence(
+  sv,
+  v = "PAY_0"
+)
+
+print(grafico_dependencia_pay0)
+
+# ------------------------------------------------------------------------------
+# BLOCO 8 — Explicação individual (opcional)
+# ------------------------------------------------------------------------------
+prob_teste_amostra <- pred_wrapper_rf(modelo_rf_final, x_teste_shap)
+classe_prevista <- ifelse(prob_teste_amostra >= threshold_final, "Deve", "Pago")
+
+id_caso_deve <- which(classe_prevista == "Deve")[1]
+
+if (!is.na(id_caso_deve)) {
+  grafico_waterfall <- shapviz::sv_waterfall(
+    sv,
+    row_id = id_caso_deve,
+    max_display = 10
+  )
+  
+  print(grafico_waterfall)
+  
+  caso_explicado <- tibble::tibble(
+    Linha_amostra = id_caso_deve,
+    Classe_real = y_teste_shap[id_caso_deve],
+    Prob_Deve = prob_teste_amostra[id_caso_deve],
+    Classe_prevista = classe_prevista[id_caso_deve]
+  )
+  
+  print(caso_explicado)
+} else {
+  grafico_waterfall <- NULL
+  caso_explicado <- NULL
+}
+
+# ------------------------------------------------------------------------------
+# BLOCO 9 — Salvar resultados
+# ------------------------------------------------------------------------------
+saveRDS(tabela_shap, "objetos/tabela_shap_final.rds")
+readr::write_csv(tabela_shap, "resultados/tabela_shap_final.csv")
+readr::write_csv(top10_shap, "resultados/top10_shap_final.csv")
+
+ggplot2::ggsave(
+  filename = "figuras/shap_importancia_top10.png",
+  plot = grafico_shap_importancia,
+  width = 8,
+  height = 5
+)
+
+ggplot2::ggsave(
+  filename = "figuras/shap_beeswarm_top10.png",
+  plot = grafico_shap_bee,
+  width = 9,
+  height = 6
+)
+
+ggplot2::ggsave(
+  filename = "figuras/shap_dependencia_pay0.png",
+  plot = grafico_dependencia_pay0,
+  width = 8,
+  height = 5
+)
+
+if (!is.null(grafico_waterfall)) {
+  ggplot2::ggsave(
+    filename = "figuras/shap_waterfall_exemplo.png",
+    plot = grafico_waterfall,
+    width = 9,
+    height = 5
+  )
+}
+
+message("09_shap.R concluído com sucesso.")

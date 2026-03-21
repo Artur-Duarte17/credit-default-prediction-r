@@ -1,0 +1,271 @@
+# ==============================================================================
+# 07_threshold_calibracao.R
+# Responsabilidade: escolher threshold corretamente usando predições
+# out-of-fold no treino, sem tocar no conjunto de teste.
+# ==============================================================================
+
+source("00_setup.R")
+
+# ------------------------------------------------------------------------------
+# BLOCO 1 — Carregar dados e ranking
+# ------------------------------------------------------------------------------
+treino <- readRDS("objetos/treino.rds")
+ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+
+vars_top14 <- ranking_variaveis$Variavel_Original[1:14]
+dados_sub <- treino[, c(vars_top14, "Class")]
+formula_sub <- as.formula(
+  paste("Class ~", paste(vars_top14, collapse = " + "))
+)
+
+print(vars_top14)
+
+# ------------------------------------------------------------------------------
+# BLOCO 2 — Funções auxiliares
+# ------------------------------------------------------------------------------
+metricas_binarias <- function(data, lev = NULL, model = NULL) {
+  base_metrics <- caret::twoClassSummary(data, lev = lev, model = model)
+  
+  obs  <- factor(data$obs, levels = lev)
+  pred <- factor(data$pred, levels = lev)
+  
+  cm <- table(pred, obs)
+  
+  TP <- cm[lev[1], lev[1]]
+  FP <- cm[lev[1], lev[2]]
+  FN <- cm[lev[2], lev[1]]
+  TN <- cm[lev[2], lev[2]]
+  
+  Precision <- ifelse((TP + FP) == 0, NA, TP / (TP + FP))
+  Recall    <- ifelse((TP + FN) == 0, NA, TP / (TP + FN))
+  F1        <- ifelse(is.na(Precision) || is.na(Recall) || (Precision + Recall) == 0,
+                      NA,
+                      2 * Precision * Recall / (Precision + Recall))
+  GMean     <- ifelse(is.na(base_metrics["Sens"]) || is.na(base_metrics["Spec"]),
+                      NA,
+                      sqrt(base_metrics["Sens"] * base_metrics["Spec"]))
+  
+  c(
+    ROC = unname(base_metrics["ROC"]),
+    Sens = unname(base_metrics["Sens"]),
+    Spec = unname(base_metrics["Spec"]),
+    Precision = unname(Precision),
+    F1 = unname(F1),
+    GMean = unname(GMean)
+  )
+}
+
+controle_oof <- caret::trainControl(
+  method = "cv",
+  number = 5,
+  classProbs = TRUE,
+  summaryFunction = metricas_binarias,
+  savePredictions = "final",
+  allowParallel = FALSE
+)
+
+calcular_metricas_threshold <- function(obs, prob_deve, threshold, cenario, regra) {
+  
+  obs_factor <- factor(obs, levels = c("Deve", "Pago"))
+  pred_class <- ifelse(prob_deve >= threshold, "Deve", "Pago")
+  pred_factor <- factor(pred_class, levels = c("Deve", "Pago"))
+  
+  cm <- table(pred_factor, obs_factor)
+  
+  TP <- cm["Deve", "Deve"]
+  FP <- cm["Deve", "Pago"]
+  FN <- cm["Pago", "Deve"]
+  TN <- cm["Pago", "Pago"]
+  
+  Sens <- ifelse((TP + FN) == 0, NA, TP / (TP + FN))
+  Spec <- ifelse((TN + FP) == 0, NA, TN / (TN + FP))
+  Precision <- ifelse((TP + FP) == 0, NA, TP / (TP + FP))
+  F1 <- ifelse(is.na(Precision) || is.na(Sens) || (Precision + Sens) == 0,
+               NA,
+               2 * Precision * Sens / (Precision + Sens))
+  GMean <- ifelse(is.na(Sens) || is.na(Spec), NA, sqrt(Sens * Spec))
+  
+  obs_roc <- factor(obs, levels = c("Pago", "Deve"))
+  roc_obj <- pROC::roc(
+    response = obs_roc,
+    predictor = prob_deve,
+    levels = c("Pago", "Deve"),
+    direction = "<",
+    quiet = TRUE
+  )
+  
+  ROC <- as.numeric(pROC::auc(roc_obj))
+  
+  tibble::tibble(
+    Cenario = cenario,
+    RegraThreshold = regra,
+    Threshold = threshold,
+    ROC = ROC,
+    Sens = Sens,
+    Spec = Spec,
+    Precision = Precision,
+    F1 = F1,
+    GMean = GMean
+  )
+}
+
+encontrar_threshold_youden <- function(obs, prob_deve) {
+  obs_roc <- factor(obs, levels = c("Pago", "Deve"))
+  
+  roc_obj <- pROC::roc(
+    response = obs_roc,
+    predictor = prob_deve,
+    levels = c("Pago", "Deve"),
+    direction = "<",
+    quiet = TRUE
+  )
+  
+  coords_best <- pROC::coords(
+    roc = roc_obj,
+    x = "best",
+    best.method = "youden",
+    ret = c("threshold", "sensitivity", "specificity"),
+    transpose = FALSE
+  )
+  
+  list(
+    roc_obj = roc_obj,
+    threshold = as.numeric(coords_best["threshold"]),
+    sensitivity = as.numeric(coords_best["sensitivity"]),
+    specificity = as.numeric(coords_best["specificity"])
+  )
+}
+
+# ------------------------------------------------------------------------------
+# BLOCO 3 — RF sem balanceamento (OOF)
+# ------------------------------------------------------------------------------
+cat("\nTreinando RF Top-14 sem balanceamento com savePredictions...\n")
+
+set.seed(123)
+modelo_rf_base_oof <- caret::train(
+  formula_sub,
+  data = dados_sub,
+  method = "rf",
+  metric = "ROC",
+  trControl = controle_oof,
+  tuneGrid = data.frame(mtry = 3),
+  importance = TRUE,
+  ntree = 200
+)
+
+pred_base <- modelo_rf_base_oof$pred %>%
+  dplyr::filter(mtry == 3)
+
+th_base <- encontrar_threshold_youden(
+  obs = pred_base$obs,
+  prob_deve = pred_base$Deve
+)
+
+cat("Threshold Youden - RF sem balanceamento:", th_base$threshold, "\n")
+
+# ------------------------------------------------------------------------------
+# BLOCO 4 — RF com SMOTENC (OOF)
+# ------------------------------------------------------------------------------
+cat("\nTreinando RF Top-14 com SMOTENC e savePredictions...\n")
+
+receita_smotenc <- recipes::recipe(formula_sub, data = dados_sub) %>%
+  themis::step_smotenc(Class, over_ratio = 1, neighbors = 5)
+
+set.seed(123)
+modelo_rf_smotenc_oof <- caret::train(
+  receita_smotenc,
+  data = dados_sub,
+  method = "rf",
+  metric = "ROC",
+  trControl = controle_oof,
+  tuneGrid = data.frame(mtry = 2),
+  importance = TRUE,
+  ntree = 200
+)
+
+pred_smotenc <- modelo_rf_smotenc_oof$pred %>%
+  dplyr::filter(mtry == 2)
+
+th_smotenc <- encontrar_threshold_youden(
+  obs = pred_smotenc$obs,
+  prob_deve = pred_smotenc$Deve
+)
+
+cat("Threshold Youden - RF com SMOTENC:", th_smotenc$threshold, "\n")
+
+# ------------------------------------------------------------------------------
+# BLOCO 5 — Comparar threshold padrão 0.50 vs Youden
+# ------------------------------------------------------------------------------
+tabela_thresholds <- dplyr::bind_rows(
+  calcular_metricas_threshold(
+    obs = pred_base$obs,
+    prob_deve = pred_base$Deve,
+    threshold = 0.50,
+    cenario = "RF_Top14_SemBalanceamento",
+    regra = "Padrao_0.50"
+  ),
+  calcular_metricas_threshold(
+    obs = pred_base$obs,
+    prob_deve = pred_base$Deve,
+    threshold = th_base$threshold,
+    cenario = "RF_Top14_SemBalanceamento",
+    regra = "Youden"
+  ),
+  calcular_metricas_threshold(
+    obs = pred_smotenc$obs,
+    prob_deve = pred_smotenc$Deve,
+    threshold = 0.50,
+    cenario = "RF_Top14_ComSMOTENC",
+    regra = "Padrao_0.50"
+  ),
+  calcular_metricas_threshold(
+    obs = pred_smotenc$obs,
+    prob_deve = pred_smotenc$Deve,
+    threshold = th_smotenc$threshold,
+    cenario = "RF_Top14_ComSMOTENC",
+    regra = "Youden"
+  )
+)
+
+print(tabela_thresholds)
+
+# ------------------------------------------------------------------------------
+# BLOCO 6 — Gráfico simples das métricas
+# ------------------------------------------------------------------------------
+tabela_longa <- tabela_thresholds %>%
+  dplyr::select(Cenario, RegraThreshold, Sens, Spec, Precision, F1, GMean) %>%
+  tidyr::pivot_longer(
+    cols = c(Sens, Spec, Precision, F1, GMean),
+    names_to = "Metrica",
+    values_to = "Valor"
+  )
+
+grafico_metricas_threshold <- ggplot2::ggplot(
+  tabela_longa,
+  aes(x = Metrica, y = Valor, fill = RegraThreshold)
+) +
+  ggplot2::geom_col(position = "dodge") +
+  ggplot2::facet_wrap(~ Cenario) +
+  ggplot2::labs(
+    title = "Impacto do threshold padrão vs Youden",
+    x = "Métrica",
+    y = "Valor"
+  ) +
+  ggplot2::theme_minimal()
+
+print(grafico_metricas_threshold)
+
+# ------------------------------------------------------------------------------
+# BLOCO 7 — Salvar resultados
+# ------------------------------------------------------------------------------
+saveRDS(tabela_thresholds, "objetos/tabela_thresholds_top14.rds")
+readr::write_csv(tabela_thresholds, "resultados/tabela_thresholds_top14.csv")
+
+ggplot2::ggsave(
+  filename = "figuras/comparacao_thresholds_top14.png",
+  plot = grafico_metricas_threshold,
+  width = 9,
+  height = 5
+)
+
+message("07_threshold_calibracao.R concluído com sucesso.")
