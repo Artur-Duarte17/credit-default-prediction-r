@@ -5,6 +5,12 @@
 
 options(repos = c(CRAN = "https://cran.rstudio.com"))
 
+if (!interactive()) {
+  # Em execucao batch, evita a criacao automatica do arquivo Rplots.pdf
+  # quando algum grafico e impresso antes do ggsave().
+  options(device = function(...) grDevices::pdf(file = NULL))
+}
+
 if (!require(pacman, quietly = TRUE)) install.packages("pacman")
 
 pacman::p_load(
