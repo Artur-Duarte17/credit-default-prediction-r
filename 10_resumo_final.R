@@ -14,7 +14,11 @@ if (file.exists("objetos/metadata_shap_modelo.rds")) {
   metadata_shap <- NULL
 }
 
-if (file.exists("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds")) {
+if (file.exists("objetos/tabela_benchmark_modelos_sem_balanceamento.rds")) {
+  tabela_benchmark_modelos <- readRDS("objetos/tabela_benchmark_modelos_sem_balanceamento.rds")
+} else if (file.exists("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds")) {
+  tabela_benchmark_modelos <- readRDS("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds")
+} else if (file.exists("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds")) {
   tabela_benchmark_modelos <- readRDS("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds")
 } else {
   tabela_benchmark_modelos <- NULL
@@ -27,7 +31,7 @@ if (file.exists("objetos/tabela_rf_xgb_balanceamento_smotenc.rds")) {
 }
 
 if (!is.null(tabela_benchmark_modelos)) {
-  cat("\n================ BENCHMARK GLM / RF / XGBOOST ================\n")
+  cat("\n================ BENCHMARK MODELOS SEM BALANCEAMENTO ================\n")
   print(tabela_benchmark_modelos %>% dplyr::slice(1:10))
 }
 

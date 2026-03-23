@@ -1,7 +1,7 @@
 # ==============================================================================
 # 08_avaliacao_teste.R
 # Responsabilidade: avaliar no conjunto de teste os cenários finalistas
-# de RF e XGBoost no Top-14 com threshold calibrado via Youden.
+# de RF e XGBoost com threshold calibrado via Youden.
 # ==============================================================================
 
 source("00_setup.R")
@@ -11,17 +11,43 @@ source("00_setup.R")
 # ------------------------------------------------------------------------------
 treino <- readRDS("objetos/treino.rds")
 teste  <- readRDS("objetos/teste.rds")
-ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
-config_modelos <- readRDS("objetos/config_modelos_top14.rds")
+config_modelos <- readRDS("objetos/config_modelos_finais.rds")
 
-vars_top14 <- ranking_variaveis$Variavel_Original[1:14]
+parse_variaveis <- function(texto_variaveis) {
+  trimws(strsplit(texto_variaveis, ",")[[1]])
+}
 
-treino_sub <- treino[, c(vars_top14, "Class")]
-teste_sub  <- teste[, c(vars_top14, "Class")]
+config_rf_base <- config_modelos %>%
+  dplyr::filter(Modelo == "RF", Usa_SMOTENC == FALSE) %>%
+  dplyr::slice(1)
 
-print(vars_top14)
-print(dim(treino_sub))
-print(dim(teste_sub))
+config_rf_smotenc <- config_modelos %>%
+  dplyr::filter(Modelo == "RF", Usa_SMOTENC == TRUE) %>%
+  dplyr::slice(1)
+
+config_xgb_base <- config_modelos %>%
+  dplyr::filter(Modelo == "XGBoost", Usa_SMOTENC == FALSE) %>%
+  dplyr::slice(1)
+
+config_xgb_smotenc <- config_modelos %>%
+  dplyr::filter(Modelo == "XGBoost", Usa_SMOTENC == TRUE) %>%
+  dplyr::slice(1)
+
+vars_rf <- parse_variaveis(config_rf_base$Variaveis[1])
+vars_xgb <- parse_variaveis(config_xgb_base$Variaveis[1])
+
+treino_rf_sub <- treino[, c(vars_rf, "Class")]
+teste_rf_sub  <- teste[, c(vars_rf, "Class")]
+
+treino_xgb_sub <- treino[, c(vars_xgb, "Class")]
+teste_xgb_sub  <- teste[, c(vars_xgb, "Class")]
+
+print(vars_rf)
+print(vars_xgb)
+print(dim(treino_rf_sub))
+print(dim(teste_rf_sub))
+print(dim(treino_xgb_sub))
+print(dim(teste_xgb_sub))
 print(config_modelos)
 
 # ------------------------------------------------------------------------------
@@ -135,35 +161,37 @@ treinar_prever_xgb <- function(treino_df, teste_df, config_xgb) {
 
   predict(modelo_xgb, newdata = x_teste)
 }
-
-obter_config <- function(cenario) {
-  config_modelos %>%
-    dplyr::filter(Cenario == cenario) %>%
-    dplyr::slice(1)
-}
-
 # ------------------------------------------------------------------------------
 # BLOCO 3 — Preparar configurações dos modelos
 # ------------------------------------------------------------------------------
-config_rf_base <- obter_config("RF_Top14_SemBalanceamento")
-config_rf_smotenc <- obter_config("RF_Top14_ComSMOTENC")
-config_xgb_base <- obter_config("XGB_Top14_SemBalanceamento")
-config_xgb_smotenc <- obter_config("XGB_Top14_ComSMOTENC")
-
-formula_sub <- as.formula(
-  paste("Class ~", paste(vars_top14, collapse = " + "))
+formula_rf <- as.formula(
+  paste("Class ~", paste(vars_rf, collapse = " + "))
 )
 
-receita_smotenc <- recipes::recipe(formula_sub, data = treino_sub) %>%
+formula_xgb <- as.formula(
+  paste("Class ~", paste(vars_xgb, collapse = " + "))
+)
+
+receita_rf_smotenc <- recipes::recipe(formula_rf, data = treino_rf_sub) %>%
   themis::step_smotenc(Class, over_ratio = 1, neighbors = 5, skip = TRUE)
 
-prep_smotenc <- recipes::prep(receita_smotenc, training = treino_sub, retain = TRUE)
+prep_rf_smotenc <- recipes::prep(receita_rf_smotenc, training = treino_rf_sub, retain = TRUE)
 
-treino_smotenc <- recipes::juice(prep_smotenc)
-teste_proc     <- recipes::bake(prep_smotenc, new_data = teste_sub)
+treino_rf_smotenc <- recipes::juice(prep_rf_smotenc)
+teste_rf_proc     <- recipes::bake(prep_rf_smotenc, new_data = teste_rf_sub)
 
-print(dim(treino_smotenc))
-print(dim(teste_proc))
+receita_xgb_smotenc <- recipes::recipe(formula_xgb, data = treino_xgb_sub) %>%
+  themis::step_smotenc(Class, over_ratio = 1, neighbors = 5, skip = TRUE)
+
+prep_xgb_smotenc <- recipes::prep(receita_xgb_smotenc, training = treino_xgb_sub, retain = TRUE)
+
+treino_xgb_smotenc <- recipes::juice(prep_xgb_smotenc)
+teste_xgb_proc     <- recipes::bake(prep_xgb_smotenc, new_data = teste_xgb_sub)
+
+print(dim(treino_rf_smotenc))
+print(dim(teste_rf_proc))
+print(dim(treino_xgb_smotenc))
+print(dim(teste_xgb_proc))
 
 # ------------------------------------------------------------------------------
 # BLOCO 4 — RF final sem balanceamento
@@ -171,8 +199,8 @@ print(dim(teste_proc))
 cat("\nTreinando RF final sem balanceamento...\n")
 
 modelo_rf_final_base <- randomForest::randomForest(
-  formula_sub,
-  data = treino_sub,
+  formula_rf,
+  data = treino_rf_sub,
   mtry = config_rf_base$mtry,
   ntree = 200,
   importance = TRUE
@@ -180,15 +208,15 @@ modelo_rf_final_base <- randomForest::randomForest(
 
 prob_rf_base <- predict(
   modelo_rf_final_base,
-  newdata = teste_sub,
+  newdata = teste_rf_sub,
   type = "prob"
 )[, "Deve"]
 
 metricas_rf_base <- calcular_metricas_teste(
-  obs = teste_sub$Class,
+  obs = teste_rf_sub$Class,
   prob_deve = prob_rf_base,
   threshold = config_rf_base$Threshold_Youden,
-  cenario = "RF_Top14_SemBalanceamento_Youden"
+  cenario = paste0(config_rf_base$Cenario, "_Youden")
 )
 
 print(metricas_rf_base)
@@ -199,8 +227,8 @@ print(metricas_rf_base)
 cat("\nTreinando RF final com SMOTENC...\n")
 
 modelo_rf_final_smotenc <- randomForest::randomForest(
-  formula_sub,
-  data = treino_smotenc,
+  formula_rf,
+  data = treino_rf_smotenc,
   mtry = config_rf_smotenc$mtry,
   ntree = 200,
   importance = TRUE
@@ -208,15 +236,15 @@ modelo_rf_final_smotenc <- randomForest::randomForest(
 
 prob_rf_smotenc <- predict(
   modelo_rf_final_smotenc,
-  newdata = teste_proc,
+  newdata = teste_rf_proc,
   type = "prob"
 )[, "Deve"]
 
 metricas_rf_smotenc <- calcular_metricas_teste(
-  obs = teste_proc$Class,
+  obs = teste_rf_proc$Class,
   prob_deve = prob_rf_smotenc,
   threshold = config_rf_smotenc$Threshold_Youden,
-  cenario = "RF_Top14_ComSMOTENC_Youden"
+  cenario = paste0(config_rf_smotenc$Cenario, "_Youden")
 )
 
 print(metricas_rf_smotenc)
@@ -227,16 +255,16 @@ print(metricas_rf_smotenc)
 cat("\nTreinando XGBoost final sem balanceamento...\n")
 
 prob_xgb_base <- treinar_prever_xgb(
-  treino_df = treino_sub,
-  teste_df = teste_sub,
+  treino_df = treino_xgb_sub,
+  teste_df = teste_xgb_sub,
   config_xgb = config_xgb_base
 )
 
 metricas_xgb_base <- calcular_metricas_teste(
-  obs = teste_sub$Class,
+  obs = teste_xgb_sub$Class,
   prob_deve = prob_xgb_base,
   threshold = config_xgb_base$Threshold_Youden,
-  cenario = "XGB_Top14_SemBalanceamento_Youden"
+  cenario = paste0(config_xgb_base$Cenario, "_Youden")
 )
 
 print(metricas_xgb_base)
@@ -247,16 +275,16 @@ print(metricas_xgb_base)
 cat("\nTreinando XGBoost final com SMOTENC...\n")
 
 prob_xgb_smotenc <- treinar_prever_xgb(
-  treino_df = treino_smotenc,
-  teste_df = teste_proc,
+  treino_df = treino_xgb_smotenc,
+  teste_df = teste_xgb_proc,
   config_xgb = config_xgb_smotenc
 )
 
 metricas_xgb_smotenc <- calcular_metricas_teste(
-  obs = teste_proc$Class,
+  obs = teste_xgb_proc$Class,
   prob_deve = prob_xgb_smotenc,
   threshold = config_xgb_smotenc$Threshold_Youden,
-  cenario = "XGB_Top14_ComSMOTENC_Youden"
+  cenario = paste0(config_xgb_smotenc$Cenario, "_Youden")
 )
 
 print(metricas_xgb_smotenc)
@@ -306,7 +334,7 @@ grafico_metricas_teste <- ggplot2::ggplot(
 print(grafico_metricas_teste)
 
 roc_rf_base <- pROC::roc(
-  response = factor(teste_sub$Class, levels = c("Pago", "Deve")),
+  response = factor(teste_rf_sub$Class, levels = c("Pago", "Deve")),
   predictor = prob_rf_base,
   levels = c("Pago", "Deve"),
   direction = "<",
@@ -314,7 +342,7 @@ roc_rf_base <- pROC::roc(
 )
 
 roc_rf_smotenc <- pROC::roc(
-  response = factor(teste_proc$Class, levels = c("Pago", "Deve")),
+  response = factor(teste_rf_proc$Class, levels = c("Pago", "Deve")),
   predictor = prob_rf_smotenc,
   levels = c("Pago", "Deve"),
   direction = "<",
@@ -322,7 +350,7 @@ roc_rf_smotenc <- pROC::roc(
 )
 
 roc_xgb_base <- pROC::roc(
-  response = factor(teste_sub$Class, levels = c("Pago", "Deve")),
+  response = factor(teste_xgb_sub$Class, levels = c("Pago", "Deve")),
   predictor = prob_xgb_base,
   levels = c("Pago", "Deve"),
   direction = "<",
@@ -330,7 +358,7 @@ roc_xgb_base <- pROC::roc(
 )
 
 roc_xgb_smotenc <- pROC::roc(
-  response = factor(teste_proc$Class, levels = c("Pago", "Deve")),
+  response = factor(teste_xgb_proc$Class, levels = c("Pago", "Deve")),
   predictor = prob_xgb_smotenc,
   levels = c("Pago", "Deve"),
   direction = "<",
@@ -341,22 +369,22 @@ df_roc <- dplyr::bind_rows(
   tibble::tibble(
     FPR = 1 - roc_rf_base$specificities,
     TPR = roc_rf_base$sensitivities,
-    Cenario = "RF_Top14_SemBalanceamento_Youden"
+    Cenario = paste0(config_rf_base$Cenario, "_Youden")
   ),
   tibble::tibble(
     FPR = 1 - roc_rf_smotenc$specificities,
     TPR = roc_rf_smotenc$sensitivities,
-    Cenario = "RF_Top14_ComSMOTENC_Youden"
+    Cenario = paste0(config_rf_smotenc$Cenario, "_Youden")
   ),
   tibble::tibble(
     FPR = 1 - roc_xgb_base$specificities,
     TPR = roc_xgb_base$sensitivities,
-    Cenario = "XGB_Top14_SemBalanceamento_Youden"
+    Cenario = paste0(config_xgb_base$Cenario, "_Youden")
   ),
   tibble::tibble(
     FPR = 1 - roc_xgb_smotenc$specificities,
     TPR = roc_xgb_smotenc$sensitivities,
-    Cenario = "XGB_Top14_ComSMOTENC_Youden"
+    Cenario = paste0(config_xgb_smotenc$Cenario, "_Youden")
   )
 )
 

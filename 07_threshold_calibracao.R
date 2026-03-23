@@ -12,14 +12,34 @@ source("00_setup.R")
 # ------------------------------------------------------------------------------
 treino <- readRDS("objetos/treino.rds")
 ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+melhor_topn_xgb <- readRDS("objetos/melhor_topn_xgboost.rds")
 
-vars_top14 <- ranking_variaveis$Variavel_Original[1:14]
-dados_sub <- treino[, c(vars_top14, "Class")]
-formula_sub <- as.formula(
-  paste("Class ~", paste(vars_top14, collapse = " + "))
+parse_variaveis <- function(texto_variaveis) {
+  trimws(strsplit(texto_variaveis, ",")[[1]])
+}
+
+vars_rf <- ranking_variaveis$Variavel_Original[1:14]
+vars_xgb <- parse_variaveis(melhor_topn_xgb$Variaveis[1])
+topn_xgb <- as.integer(melhor_topn_xgb$TopN[1])
+
+dados_rf <- treino[, c(vars_rf, "Class")]
+dados_xgb <- treino[, c(vars_xgb, "Class")]
+
+formula_rf <- as.formula(
+  paste("Class ~", paste(vars_rf, collapse = " + "))
 )
 
-print(vars_top14)
+formula_xgb <- as.formula(
+  paste("Class ~", paste(vars_xgb, collapse = " + "))
+)
+
+cenario_rf_base <- "RF_Top14_SemBalanceamento"
+cenario_rf_smotenc <- "RF_Top14_ComSMOTENC"
+cenario_xgb_base <- paste0("XGB_Top", topn_xgb, "_SemBalanceamento")
+cenario_xgb_smotenc <- paste0("XGB_Top", topn_xgb, "_ComSMOTENC")
+
+print(vars_rf)
+print(vars_xgb)
 
 # ------------------------------------------------------------------------------
 # BLOCO 2 — Funções auxiliares
@@ -274,8 +294,8 @@ cat("\nTreinando RF Top-14 sem balanceamento com savePredictions...\n")
 
 set.seed(123)
 modelo_rf_base_oof <- caret::train(
-  formula_sub,
-  data = dados_sub,
+  formula_rf,
+  data = dados_rf,
   method = "rf",
   metric = "ROC",
   trControl = controle_oof,
@@ -300,13 +320,13 @@ cat("Threshold Youden - RF sem balanceamento:", th_base$threshold, "\n")
 # ------------------------------------------------------------------------------
 cat("\nTreinando RF Top-14 com SMOTENC e savePredictions...\n")
 
-receita_smotenc <- recipes::recipe(formula_sub, data = dados_sub) %>%
+receita_smotenc <- recipes::recipe(formula_rf, data = dados_rf) %>%
   themis::step_smotenc(Class, over_ratio = 1, neighbors = 5)
 
 set.seed(123)
 modelo_rf_smotenc_oof <- caret::train(
   receita_smotenc,
-  data = dados_sub,
+  data = dados_rf,
   method = "rf",
   metric = "ROC",
   trControl = controle_oof,
@@ -340,17 +360,17 @@ grid_xgb <- expand.grid(
 )
 
 set.seed(123)
-folds_xgb <- caret::createFolds(dados_sub$Class, k = 5, returnTrain = FALSE)
+folds_xgb <- caret::createFolds(dados_xgb$Class, k = 5, returnTrain = FALSE)
 
-cat("\nTreinando XGBoost Top-14 sem balanceamento com OOF manual...\n")
+cat("\nTreinando XGBoost no melhor Top-N sem balanceamento com OOF manual...\n")
 
 set.seed(123)
 resultado_xgb_base <- avaliar_xgb_oof(
-  dados = dados_sub,
+  dados = dados_xgb,
   folds = folds_xgb,
   grid_xgb = grid_xgb,
   aplicar_smotenc = FALSE,
-  formula_modelo = formula_sub
+  formula_modelo = formula_xgb
 )
 
 pred_xgb_base <- resultado_xgb_base$pred_melhor
@@ -370,15 +390,15 @@ cat("Threshold Youden - XGBoost sem balanceamento:", th_xgb_base$threshold, "\n"
 # ------------------------------------------------------------------------------
 # BLOCO 6 — XGBoost com SMOTENC (OOF manual)
 # ------------------------------------------------------------------------------
-cat("\nTreinando XGBoost Top-14 com SMOTENC e OOF manual...\n")
+cat("\nTreinando XGBoost no melhor Top-N com SMOTENC e OOF manual...\n")
 
 set.seed(123)
 resultado_xgb_smotenc <- avaliar_xgb_oof(
-  dados = dados_sub,
+  dados = dados_xgb,
   folds = folds_xgb,
   grid_xgb = grid_xgb,
   aplicar_smotenc = TRUE,
-  formula_modelo = formula_sub
+  formula_modelo = formula_xgb
 )
 
 pred_xgb_smotenc <- resultado_xgb_smotenc$pred_melhor
@@ -403,56 +423,56 @@ tabela_thresholds <- dplyr::bind_rows(
     obs = pred_base$obs,
     prob_deve = pred_base$Deve,
     threshold = 0.50,
-    cenario = "RF_Top14_SemBalanceamento",
+    cenario = cenario_rf_base,
     regra = "Padrao_0.50"
   ),
   calcular_metricas_threshold(
     obs = pred_base$obs,
     prob_deve = pred_base$Deve,
     threshold = th_base$threshold,
-    cenario = "RF_Top14_SemBalanceamento",
+    cenario = cenario_rf_base,
     regra = "Youden"
   ),
   calcular_metricas_threshold(
     obs = pred_smotenc$obs,
     prob_deve = pred_smotenc$Deve,
     threshold = 0.50,
-    cenario = "RF_Top14_ComSMOTENC",
+    cenario = cenario_rf_smotenc,
     regra = "Padrao_0.50"
   ),
   calcular_metricas_threshold(
     obs = pred_smotenc$obs,
     prob_deve = pred_smotenc$Deve,
     threshold = th_smotenc$threshold,
-    cenario = "RF_Top14_ComSMOTENC",
+    cenario = cenario_rf_smotenc,
     regra = "Youden"
   ),
   calcular_metricas_threshold(
     obs = pred_xgb_base$obs,
     prob_deve = pred_xgb_base$Deve,
     threshold = 0.50,
-    cenario = "XGB_Top14_SemBalanceamento",
+    cenario = cenario_xgb_base,
     regra = "Padrao_0.50"
   ),
   calcular_metricas_threshold(
     obs = pred_xgb_base$obs,
     prob_deve = pred_xgb_base$Deve,
     threshold = th_xgb_base$threshold,
-    cenario = "XGB_Top14_SemBalanceamento",
+    cenario = cenario_xgb_base,
     regra = "Youden"
   ),
   calcular_metricas_threshold(
     obs = pred_xgb_smotenc$obs,
     prob_deve = pred_xgb_smotenc$Deve,
     threshold = 0.50,
-    cenario = "XGB_Top14_ComSMOTENC",
+    cenario = cenario_xgb_smotenc,
     regra = "Padrao_0.50"
   ),
   calcular_metricas_threshold(
     obs = pred_xgb_smotenc$obs,
     prob_deve = pred_xgb_smotenc$Deve,
     threshold = th_xgb_smotenc$threshold,
-    cenario = "XGB_Top14_ComSMOTENC",
+    cenario = cenario_xgb_smotenc,
     regra = "Youden"
   )
 )
@@ -461,22 +481,24 @@ print(tabela_thresholds)
 
 config_modelos <- dplyr::bind_rows(
   tibble::tibble(
-    Cenario = "RF_Top14_SemBalanceamento",
+    Cenario = cenario_rf_base,
     Modelo = "RF",
+    TopN = length(vars_rf),
+    Variaveis = paste(vars_rf, collapse = ", "),
     Usa_SMOTENC = FALSE,
     Threshold_Youden = th_base$threshold,
     ROC_OOF = calcular_metricas_threshold(
       obs = pred_base$obs,
       prob_deve = pred_base$Deve,
       threshold = th_base$threshold,
-      cenario = "RF_Top14_SemBalanceamento",
+      cenario = cenario_rf_base,
       regra = "Youden"
     )$ROC,
     F1_OOF = calcular_metricas_threshold(
       obs = pred_base$obs,
       prob_deve = pred_base$Deve,
       threshold = th_base$threshold,
-      cenario = "RF_Top14_SemBalanceamento",
+      cenario = cenario_rf_base,
       regra = "Youden"
     )$F1,
     mtry = 3,
@@ -489,22 +511,24 @@ config_modelos <- dplyr::bind_rows(
     subsample = NA_real_
   ),
   tibble::tibble(
-    Cenario = "RF_Top14_ComSMOTENC",
+    Cenario = cenario_rf_smotenc,
     Modelo = "RF",
+    TopN = length(vars_rf),
+    Variaveis = paste(vars_rf, collapse = ", "),
     Usa_SMOTENC = TRUE,
     Threshold_Youden = th_smotenc$threshold,
     ROC_OOF = calcular_metricas_threshold(
       obs = pred_smotenc$obs,
       prob_deve = pred_smotenc$Deve,
       threshold = th_smotenc$threshold,
-      cenario = "RF_Top14_ComSMOTENC",
+      cenario = cenario_rf_smotenc,
       regra = "Youden"
     )$ROC,
     F1_OOF = calcular_metricas_threshold(
       obs = pred_smotenc$obs,
       prob_deve = pred_smotenc$Deve,
       threshold = th_smotenc$threshold,
-      cenario = "RF_Top14_ComSMOTENC",
+      cenario = cenario_rf_smotenc,
       regra = "Youden"
     )$F1,
     mtry = 2,
@@ -518,8 +542,10 @@ config_modelos <- dplyr::bind_rows(
   ),
   resultado_xgb_base$melhor_resultado %>%
     dplyr::transmute(
-      Cenario = "XGB_Top14_SemBalanceamento",
+      Cenario = cenario_xgb_base,
       Modelo = "XGBoost",
+      TopN = length(vars_xgb),
+      Variaveis = paste(vars_xgb, collapse = ", "),
       Usa_SMOTENC = FALSE,
       Threshold_Youden = th_xgb_base$threshold,
       ROC_OOF = ROC,
@@ -535,8 +561,10 @@ config_modelos <- dplyr::bind_rows(
     ),
   resultado_xgb_smotenc$melhor_resultado %>%
     dplyr::transmute(
-      Cenario = "XGB_Top14_ComSMOTENC",
+      Cenario = cenario_xgb_smotenc,
       Modelo = "XGBoost",
+      TopN = length(vars_xgb),
+      Variaveis = paste(vars_xgb, collapse = ", "),
       Usa_SMOTENC = TRUE,
       Threshold_Youden = th_xgb_smotenc$threshold,
       ROC_OOF = ROC,
@@ -583,14 +611,14 @@ print(grafico_metricas_threshold)
 # ------------------------------------------------------------------------------
 # BLOCO 9 — Salvar resultados
 # ------------------------------------------------------------------------------
-saveRDS(tabela_thresholds, "objetos/tabela_thresholds_top14.rds")
-readr::write_csv(tabela_thresholds, "resultados/tabela_thresholds_top14.csv")
+saveRDS(tabela_thresholds, "objetos/tabela_thresholds_finais.rds")
+readr::write_csv(tabela_thresholds, "resultados/tabela_thresholds_finais.csv")
 
-saveRDS(config_modelos, "objetos/config_modelos_top14.rds")
-readr::write_csv(config_modelos, "resultados/config_modelos_top14.csv")
+saveRDS(config_modelos, "objetos/config_modelos_finais.rds")
+readr::write_csv(config_modelos, "resultados/config_modelos_finais.csv")
 
 ggplot2::ggsave(
-  filename = "figuras/comparacao_thresholds_top14.png",
+  filename = "figuras/comparacao_thresholds_finais.png",
   plot = grafico_metricas_threshold,
   width = 12,
   height = 7

@@ -11,9 +11,12 @@ source("00_setup.R")
 # ------------------------------------------------------------------------------
 treino <- readRDS("objetos/treino.rds")
 teste  <- readRDS("objetos/teste.rds")
-ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
 tabela_teste <- readRDS("objetos/tabela_teste_final.rds")
-config_modelos <- readRDS("objetos/config_modelos_top14.rds")
+config_modelos <- readRDS("objetos/config_modelos_finais.rds")
+
+parse_variaveis <- function(texto_variaveis) {
+  trimws(strsplit(texto_variaveis, ",")[[1]])
+}
 
 melhor_cenario_teste <- tabela_teste %>%
   dplyr::slice_max(order_by = ROC, n = 1, with_ties = FALSE)
@@ -23,14 +26,14 @@ config_modelo <- config_modelos %>%
   dplyr::filter(Cenario == cenario_base) %>%
   dplyr::slice(1)
 
-vars_top14 <- ranking_variaveis$Variavel_Original[1:14]
+vars_modelo <- parse_variaveis(config_modelo$Variaveis[1])
 
-treino_sub <- treino[, c(vars_top14, "Class")]
-teste_sub  <- teste[, c(vars_top14, "Class")]
+treino_sub <- treino[, c(vars_modelo, "Class")]
+teste_sub  <- teste[, c(vars_modelo, "Class")]
 
 print(melhor_cenario_teste)
 print(config_modelo)
-print(vars_top14)
+print(vars_modelo)
 
 # ------------------------------------------------------------------------------
 # BLOCO 2 — Funções auxiliares
@@ -94,7 +97,7 @@ mapear_variavel_original <- function(nome_modelo, nomes_originais) {
 # BLOCO 3 — Preparar base do modelo vencedor
 # ------------------------------------------------------------------------------
 formula_sub <- as.formula(
-  paste("Class ~", paste(vars_top14, collapse = " + "))
+  paste("Class ~", paste(vars_modelo, collapse = " + "))
 )
 
 dados_modelo <- preparar_dados_modelo(
@@ -125,8 +128,8 @@ if (config_modelo$Modelo == "RF") {
     importance = TRUE
   )
 
-  x_treino_bg <- as.data.frame(treino_modelo[, vars_top14])
-  x_teste_full <- as.data.frame(teste_modelo[, vars_top14])
+  x_treino_bg <- as.data.frame(treino_modelo[, vars_modelo])
+  x_teste_full <- as.data.frame(teste_modelo[, vars_modelo])
 
   pred_wrapper_modelo <- function(object, newdata) {
     newdata <- as.data.frame(newdata)
@@ -229,7 +232,7 @@ if (config_modelo$Modelo == "XGBoost") {
       Variavel_Original = purrr::map_chr(
         Variavel,
         mapear_variavel_original,
-        nomes_originais = vars_top14
+        nomes_originais = vars_modelo
       )
     ) %>%
     dplyr::group_by(Variavel_Original) %>%
