@@ -110,7 +110,8 @@ grafico_melhores_topn <- ggplot2::ggplot(top10_plot, ggplot2::aes(x = ROC, y = S
   ggplot2::geom_text(
     ggplot2::aes(label = round(ROC, 5)),
     hjust = -0.3,
-    size = 3.5
+    size = 3.5,
+    show.legend = FALSE
   ) +
   ggplot2::labs(
     title = "Top 10 Melhores Subconjuntos por ROC - XGBoost",
@@ -143,22 +144,28 @@ print(grafico_roc_topn)
 # ------------------------------------------------------------------------------
 # BLOCO 5 - Salvar resultados
 # ------------------------------------------------------------------------------
-saveRDS(curva_topn_xgb, "objetos/curva_topn_xgboost.rds")
-saveRDS(melhor_topn_xgb, "objetos/melhor_topn_xgboost.rds")
+salvar_rds_saida(curva_topn_xgb, "exploratorio", "curva_topn_xgboost.rds", subpastas = "topn")
+salvar_rds_saida(melhor_topn_xgb, "exploratorio", "melhor_topn_xgboost.rds", subpastas = "topn")
 
-readr::write_csv(curva_topn_xgb, "resultados/curva_topn_xgboost.csv")
-readr::write_csv(top10_topn_xgb, "resultados/top10_topn_xgboost.csv")
+salvar_csv_saida(curva_topn_xgb, "exploratorio", "curva_topn_xgboost.csv", subpastas = "topn")
+salvar_csv_saida(top10_topn_xgb, "exploratorio", "top10_topn_xgboost.csv", subpastas = "topn")
 
-ggplot2::ggsave(
-  filename = "figuras/curva_roc_topn_xgboost.png",
+salvar_figura_saida(
   plot = grafico_roc_topn,
+  fase = "exploratorio",
+  arquivo = "roc_topn_xgboost_principal.png",
+  subpastas = "topn",
+  classificacao = "principal",
   width = 8,
   height = 5
 )
 
-ggplot2::ggsave(
-  filename = "figuras/top10_melhores_subconjuntos_xgboost.png",
+salvar_figura_saida(
   plot = grafico_melhores_topn,
+  fase = "exploratorio",
+  arquivo = "top10_topn_xgboost_suplementar.png",
+  subpastas = "topn",
+  classificacao = "suplementar",
   width = 8,
   height = 5
 )

@@ -35,18 +35,195 @@ pacman::p_load(
   shapviz
 )
 
-PASTAS_PROJETO <- c(
+FASES_SAIDA <- c("exploratorio", "confirmacao", "final", "interpretabilidade")
+CLASSIFICACOES_FIGURA <- c("principal", "suplementar", "tecnico")
+
+SALVAR_FIGURAS_SUPLEMENTARES <- FALSE
+SALVAR_FIGURAS_TECNICAS <- FALSE
+
+PASTAS_PROJETO <- unique(c(
   "dados",
   "resultados",
   "figuras",
   "objetos",
   "objetos/splits",
   "R",
-  "docs"
-)
+  "docs",
+  file.path("objetos", FASES_SAIDA),
+  file.path("objetos", "exploratorio", "topn"),
+  file.path("objetos", "exploratorio", "benchmark"),
+  file.path("objetos", "confirmacao", "benchmark"),
+  file.path("objetos", "confirmacao", "balanceamento"),
+  file.path("objetos", "final", c("threshold", "teste")),
+  file.path("objetos", "interpretabilidade", "shap"),
+  file.path("resultados", FASES_SAIDA),
+  file.path("resultados", "exploratorio", "topn"),
+  file.path("resultados", "exploratorio", "benchmark"),
+  file.path("resultados", "confirmacao", "benchmark"),
+  file.path("resultados", "confirmacao", "balanceamento"),
+  file.path("resultados", "final", c("threshold", "teste")),
+  file.path("resultados", "interpretabilidade", "shap"),
+  file.path("figuras", c(FASES_SAIDA, "suplementares")),
+  file.path("figuras", "exploratorio", "topn"),
+  file.path("figuras", "confirmacao", c("benchmark", "balanceamento")),
+  file.path("figuras", "final", c("threshold", "teste")),
+  file.path("figuras", "interpretabilidade", "shap"),
+  file.path("figuras", "suplementares", FASES_SAIDA),
+  file.path("figuras", "suplementares", "exploratorio", "topn"),
+  file.path("figuras", "suplementares", "interpretabilidade", "shap"),
+  file.path("figuras", "suplementares", "tecnico"),
+  file.path("figuras", "suplementares", "tecnico", "confirmacao", c("benchmark", "balanceamento")),
+  file.path("figuras", "suplementares", "tecnico", FASES_SAIDA),
+  file.path("docs", "interpretabilidade")
+))
+
+garantir_pasta <- function(pasta) {
+  if (!dir.exists(pasta)) {
+    dir.create(pasta, recursive = TRUE)
+  }
+
+  pasta
+}
+
+normalizar_componentes_caminho <- function(...) {
+  partes <- unlist(list(...), use.names = FALSE)
+  partes <- partes[!is.na(partes)]
+  partes <- partes[nzchar(partes)]
+  partes
+}
+
+montar_caminho_saida <- function(diretorio_raiz, fase = NULL, arquivo = NULL, subpastas = NULL) {
+  partes <- normalizar_componentes_caminho(diretorio_raiz, fase, subpastas, arquivo)
+  caminho <- do.call(file.path, as.list(partes))
+  garantir_pasta(dirname(caminho))
+  caminho
+}
+
+caminho_objeto_saida <- function(fase, arquivo, subpastas = NULL) {
+  montar_caminho_saida("objetos", fase = fase, arquivo = arquivo, subpastas = subpastas)
+}
+
+caminho_resultado_saida <- function(fase, arquivo, subpastas = NULL) {
+  montar_caminho_saida("resultados", fase = fase, arquivo = arquivo, subpastas = subpastas)
+}
+
+caminho_figura_saida <- function(
+  fase,
+  arquivo,
+  subpastas = NULL,
+  classificacao = c("principal", "suplementar", "tecnico")
+) {
+  classificacao <- match.arg(classificacao)
+
+  partes_base <- switch(
+    classificacao,
+    principal = c("figuras", fase),
+    suplementar = c("figuras", "suplementares", fase),
+    tecnico = c("figuras", "suplementares", "tecnico", fase)
+  )
+
+  partes <- normalizar_componentes_caminho(partes_base, subpastas, arquivo)
+  caminho <- do.call(file.path, as.list(partes))
+  garantir_pasta(dirname(caminho))
+  caminho
+}
+
+caminho_documento_saida <- function(arquivo, subpastas = NULL) {
+  montar_caminho_saida("docs", arquivo = arquivo, subpastas = subpastas)
+}
+
+resolver_caminho_existente <- function(caminho_preferencial, legados = character()) {
+  candidatos <- unique(c(caminho_preferencial, legados))
+  existentes <- candidatos[file.exists(candidatos)]
+
+  if (length(existentes) == 0) {
+    stop(
+      sprintf(
+        "Nenhum arquivo encontrado. Caminho esperado: %s",
+        caminho_preferencial
+      ),
+      call. = FALSE
+    )
+  }
+
+  existentes[1]
+}
+
+ler_rds_saida <- function(fase, arquivo, subpastas = NULL, legados = character()) {
+  caminho <- resolver_caminho_existente(
+    caminho_preferencial = caminho_objeto_saida(fase, arquivo, subpastas = subpastas),
+    legados = legados
+  )
+
+  readRDS(caminho)
+}
+
+salvar_rds_saida <- function(objeto, fase, arquivo, subpastas = NULL) {
+  caminho <- caminho_objeto_saida(fase = fase, arquivo = arquivo, subpastas = subpastas)
+  saveRDS(objeto, caminho)
+  invisible(caminho)
+}
+
+salvar_csv_saida <- function(tabela, fase, arquivo, subpastas = NULL) {
+  caminho <- caminho_resultado_saida(fase = fase, arquivo = arquivo, subpastas = subpastas)
+  readr::write_csv(tabela, caminho)
+  invisible(caminho)
+}
+
+deve_salvar_figura <- function(classificacao) {
+  switch(
+    classificacao,
+    principal = TRUE,
+    suplementar = isTRUE(SALVAR_FIGURAS_SUPLEMENTARES),
+    tecnico = isTRUE(SALVAR_FIGURAS_TECNICAS),
+    FALSE
+  )
+}
+
+salvar_figura_saida <- function(
+  plot,
+  fase,
+  arquivo,
+  subpastas = NULL,
+  classificacao = c("principal", "suplementar", "tecnico"),
+  width = 8,
+  height = 5,
+  dpi = 300,
+  ...
+) {
+  classificacao <- match.arg(classificacao)
+
+  if (!deve_salvar_figura(classificacao)) {
+    return(invisible(NULL))
+  }
+
+  caminho <- caminho_figura_saida(
+    fase = fase,
+    arquivo = arquivo,
+    subpastas = subpastas,
+    classificacao = classificacao
+  )
+
+  ggplot2::ggsave(
+    filename = caminho,
+    plot = plot,
+    width = width,
+    height = height,
+    dpi = dpi,
+    ...
+  )
+
+  invisible(caminho)
+}
+
+salvar_texto_saida <- function(linhas, arquivo, subpastas = NULL) {
+  caminho <- caminho_documento_saida(arquivo = arquivo, subpastas = subpastas)
+  writeLines(linhas, caminho)
+  invisible(caminho)
+}
 
 for (pasta in PASTAS_PROJETO) {
-  if (!dir.exists(pasta)) dir.create(pasta, recursive = TRUE)
+  garantir_pasta(pasta)
 }
 
 SEED_PROJETO <- 123

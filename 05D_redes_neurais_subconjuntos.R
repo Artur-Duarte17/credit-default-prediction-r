@@ -147,18 +147,42 @@ tabela_redes <- dplyr::bind_rows(resultados_confirmacao) %>%
   ) %>%
   ordenar_resultados_modelagem()
 
-if (file.exists("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds")) {
-  tabela_base <- readRDS("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds")
-} else if (file.exists("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds")) {
-  tabela_base <- readRDS("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds")
+if (file.exists(caminho_objeto_saida("confirmacao", "tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds", subpastas = "benchmark")) ||
+    file.exists("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds")) {
+  tabela_base <- ler_rds_saida(
+    "confirmacao",
+    "tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds",
+    subpastas = "benchmark",
+    legados = "objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds"
+  )
+} else if (file.exists(caminho_objeto_saida("confirmacao", "tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds", subpastas = "benchmark")) ||
+           file.exists("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds")) {
+  tabela_base <- ler_rds_saida(
+    "confirmacao",
+    "tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds",
+    subpastas = "benchmark",
+    legados = "objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds"
+  )
 } else {
   tabela_base <- NULL
 }
 
-if (file.exists("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds")) {
-  tabela_base_expl <- readRDS("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds")
-} else if (file.exists("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds")) {
-  tabela_base_expl <- readRDS("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds")
+if (file.exists(caminho_objeto_saida("exploratorio", "tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds", subpastas = "benchmark")) ||
+    file.exists("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds")) {
+  tabela_base_expl <- ler_rds_saida(
+    "exploratorio",
+    "tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds",
+    subpastas = "benchmark",
+    legados = "objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds"
+  )
+} else if (file.exists(caminho_objeto_saida("exploratorio", "tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds", subpastas = "benchmark")) ||
+           file.exists("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds")) {
+  tabela_base_expl <- ler_rds_saida(
+    "exploratorio",
+    "tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds",
+    subpastas = "benchmark",
+    legados = "objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds"
+  )
 } else {
   tabela_base_expl <- NULL
 }
@@ -180,92 +204,103 @@ if (!is.null(tabela_base_expl)) {
 print(tabela_benchmark_completa)
 
 # ------------------------------------------------------------------------------
-# BLOCO 5 - Graficos
+# BLOCO 5 - Grafico principal de benchmark confirmado
 # ------------------------------------------------------------------------------
-grafico_roc_modelos <- ggplot2::ggplot(
-  tabela_benchmark_completa,
-  ggplot2::aes(x = Subconjunto, y = ROC, color = Modelo, group = Modelo)
+tabela_plot_benchmark <- tabela_benchmark_completa %>%
+  dplyr::mutate(
+    Cenario = reorder(paste0(Modelo, " / ", Subconjunto), ROC),
+    Base = min(ROC, na.rm = TRUE) - 0.01
+  )
+
+grafico_benchmark_principal <- ggplot2::ggplot(
+  tabela_plot_benchmark,
+  ggplot2::aes(x = ROC, y = Cenario, color = Modelo)
 ) +
-  ggplot2::geom_line() +
-  ggplot2::geom_point(size = 3) +
-  ggplot2::geom_text(
-    ggplot2::aes(label = round(ROC, 4)),
-    vjust = -0.8,
-    size = 3
+  ggplot2::geom_segment(
+    ggplot2::aes(
+      x = Base,
+      xend = ROC,
+      y = Cenario,
+      yend = Cenario
+    ),
+    linewidth = 0.9,
+    alpha = 0.5,
+    show.legend = FALSE
   ) +
+  ggplot2::geom_point(size = 3) +
   ggplot2::labs(
-    title = "ROC confirmado por modelo e subconjunto",
-    x = "Subconjunto",
-    y = "ROC"
+    title = "Benchmark confirmado entre modelos",
+    subtitle = "Comparacao final sem balanceamento apos filtro exploratorio",
+    x = "ROC",
+    y = NULL
   ) +
   ggplot2::theme_minimal()
 
-grafico_f1_modelos <- ggplot2::ggplot(
-  tabela_benchmark_completa,
-  ggplot2::aes(x = Subconjunto, y = F1, color = Modelo, group = Modelo)
-) +
-  ggplot2::geom_line() +
-  ggplot2::geom_point(size = 3) +
-  ggplot2::geom_text(
-    ggplot2::aes(label = round(F1, 4)),
-    vjust = -0.8,
-    size = 3
-  ) +
-  ggplot2::labs(
-    title = "F1 confirmado por modelo e subconjunto",
-    x = "Subconjunto",
-    y = "F1"
-  ) +
-  ggplot2::theme_minimal()
-
-print(grafico_roc_modelos)
-print(grafico_f1_modelos)
+print(grafico_benchmark_principal)
 
 # ------------------------------------------------------------------------------
 # BLOCO 6 - Salvar resultados
 # ------------------------------------------------------------------------------
-saveRDS(
+salvar_rds_saida(
   tabela_exploratoria,
-  "objetos/tabela_redes_neurais_subconjuntos_sem_balanceamento_exploratorio.rds"
+  "exploratorio",
+  "tabela_redes_neurais_subconjuntos_sem_balanceamento_exploratorio.rds",
+  subpastas = "benchmark"
 )
-readr::write_csv(
+salvar_csv_saida(
   tabela_exploratoria,
-  "resultados/tabela_redes_neurais_subconjuntos_sem_balanceamento_exploratorio.csv"
+  "exploratorio",
+  "tabela_redes_neurais_subconjuntos_sem_balanceamento_exploratorio.csv",
+  subpastas = "benchmark"
 )
 
-saveRDS(tabela_redes, "objetos/tabela_redes_neurais_subconjuntos_sem_balanceamento.rds")
-readr::write_csv(tabela_redes, "resultados/tabela_redes_neurais_subconjuntos_sem_balanceamento.csv")
+salvar_rds_saida(
+  tabela_redes,
+  "confirmacao",
+  "tabela_redes_neurais_subconjuntos_sem_balanceamento.rds",
+  subpastas = "benchmark"
+)
+salvar_csv_saida(
+  tabela_redes,
+  "confirmacao",
+  "tabela_redes_neurais_subconjuntos_sem_balanceamento.csv",
+  subpastas = "benchmark"
+)
 
-saveRDS(
+salvar_rds_saida(
   tabela_benchmark_exploratoria,
-  "objetos/tabela_benchmark_modelos_sem_balanceamento_exploratorio.rds"
+  "exploratorio",
+  "tabela_benchmark_modelos_sem_balanceamento_exploratorio.rds",
+  subpastas = "benchmark"
 )
-readr::write_csv(
+salvar_csv_saida(
   tabela_benchmark_exploratoria,
-  "resultados/tabela_benchmark_modelos_sem_balanceamento_exploratorio.csv"
+  "exploratorio",
+  "tabela_benchmark_modelos_sem_balanceamento_exploratorio.csv",
+  subpastas = "benchmark"
 )
 
-saveRDS(
+salvar_rds_saida(
   tabela_benchmark_completa,
-  "objetos/tabela_benchmark_modelos_sem_balanceamento.rds"
+  "confirmacao",
+  "tabela_benchmark_modelos_sem_balanceamento.rds",
+  subpastas = "benchmark"
 )
-readr::write_csv(
+salvar_csv_saida(
   tabela_benchmark_completa,
-  "resultados/tabela_benchmark_modelos_sem_balanceamento.csv"
+  "confirmacao",
+  "tabela_benchmark_modelos_sem_balanceamento.csv",
+  subpastas = "benchmark"
 )
 
-ggplot2::ggsave(
-  filename = "figuras/roc_modelos_subconjuntos_sem_balanceamento.png",
-  plot = grafico_roc_modelos,
-  width = 8,
-  height = 5
-)
-
-ggplot2::ggsave(
-  filename = "figuras/f1_modelos_subconjuntos_sem_balanceamento.png",
-  plot = grafico_f1_modelos,
-  width = 8,
-  height = 5
+salvar_figura_saida(
+  plot = grafico_benchmark_principal,
+  fase = "confirmacao",
+  arquivo = "roc_benchmark_confirmado_principal.png",
+  subpastas = "benchmark",
+  classificacao = "principal",
+  width = 9,
+  height = 6
 )
 
 message("05D_redes_neurais_subconjuntos.R concluido com sucesso.")

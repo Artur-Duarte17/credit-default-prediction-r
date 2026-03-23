@@ -16,7 +16,12 @@ source("R/funcoes_modelos.R")
 # ------------------------------------------------------------------------------
 treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
 teste <- garantir_ordem_classe(readRDS("objetos/teste.rds"))
-config_modelos <- readRDS("objetos/config_modelos_finais.rds")
+config_modelos <- ler_rds_saida(
+  "final",
+  "config_modelos_finais.rds",
+  subpastas = "threshold",
+  legados = "objetos/config_modelos_finais.rds"
+)
 
 print(config_modelos)
 
@@ -95,13 +100,10 @@ tabela_longa <- tabela_teste %>%
 
 grafico_metricas_teste <- ggplot2::ggplot(
   tabela_longa,
-  ggplot2::aes(x = Metrica, y = Valor, fill = Cenario)
+  ggplot2::aes(x = Metrica, y = Valor, color = Cenario)
 ) +
-  ggplot2::geom_col(position = "dodge") +
-  ggplot2::geom_text(
-    ggplot2::aes(label = round(Valor, 3)),
-    position = ggplot2::position_dodge(width = 0.9),
-    vjust = -0.4,
+  ggplot2::geom_point(
+    position = ggplot2::position_dodge(width = 0.5),
     size = 3
   ) +
   ggplot2::labs(
@@ -133,19 +135,25 @@ print(grafico_roc_teste)
 # ------------------------------------------------------------------------------
 # BLOCO 4 - Salvar resultados
 # ------------------------------------------------------------------------------
-saveRDS(tabela_teste, "objetos/tabela_teste_final.rds")
-readr::write_csv(tabela_teste, "resultados/tabela_teste_final.csv")
+salvar_rds_saida(tabela_teste, "final", "tabela_teste_final.rds", subpastas = "teste")
+salvar_csv_saida(tabela_teste, "final", "tabela_teste_final.csv", subpastas = "teste")
 
-ggplot2::ggsave(
-  filename = "figuras/comparacao_final_teste_metricas.png",
+salvar_figura_saida(
   plot = grafico_metricas_teste,
+  fase = "final",
+  arquivo = "comparacao_metricas_teste_principal.png",
+  subpastas = "teste",
+  classificacao = "principal",
   width = 14,
   height = 7
 )
 
-ggplot2::ggsave(
-  filename = "figuras/curvas_roc_teste.png",
+salvar_figura_saida(
   plot = grafico_roc_teste,
+  fase = "final",
+  arquivo = "curvas_roc_teste_principal.png",
+  subpastas = "teste",
+  classificacao = "principal",
   width = 10,
   height = 6
 )

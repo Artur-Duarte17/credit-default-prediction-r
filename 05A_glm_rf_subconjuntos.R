@@ -172,72 +172,61 @@ tabela_benchmark <- dplyr::bind_rows(resultados_confirmacao) %>%
 print(tabela_benchmark)
 
 # ------------------------------------------------------------------------------
-# BLOCO 5 - Graficos
+# BLOCO 5 - Grafico tecnico
 # ------------------------------------------------------------------------------
-grafico_roc_modelos <- ggplot2::ggplot(
+grafico_benchmark_tecnico <- ggplot2::ggplot(
   tabela_benchmark,
-  ggplot2::aes(x = Subconjunto, y = ROC, color = Modelo, group = Modelo)
+  ggplot2::aes(
+    x = ROC,
+    y = reorder(paste0(Modelo, " / ", Subconjunto), ROC),
+    color = Modelo
+  )
 ) +
-  ggplot2::geom_line() +
   ggplot2::geom_point(size = 3) +
-  ggplot2::geom_text(
-    ggplot2::aes(label = round(ROC, 4)),
-    vjust = -0.8,
-    size = 3
-  ) +
   ggplot2::labs(
-    title = "ROC confirmado por modelo e subconjunto",
-    x = "Subconjunto",
-    y = "ROC"
+    title = "Benchmark tecnico confirmado - GLM e RF",
+    x = "ROC",
+    y = NULL
   ) +
   ggplot2::theme_minimal()
 
-grafico_f1_modelos <- ggplot2::ggplot(
-  tabela_benchmark,
-  ggplot2::aes(x = Subconjunto, y = F1, color = Modelo, group = Modelo)
-) +
-  ggplot2::geom_line() +
-  ggplot2::geom_point(size = 3) +
-  ggplot2::geom_text(
-    ggplot2::aes(label = round(F1, 4)),
-    vjust = -0.8,
-    size = 3
-  ) +
-  ggplot2::labs(
-    title = "F1 confirmado por modelo e subconjunto",
-    x = "Subconjunto",
-    y = "F1"
-  ) +
-  ggplot2::theme_minimal()
-
-print(grafico_roc_modelos)
-print(grafico_f1_modelos)
+print(grafico_benchmark_tecnico)
 
 # ------------------------------------------------------------------------------
 # BLOCO 6 - Salvar resultados
 # ------------------------------------------------------------------------------
-saveRDS(
+salvar_rds_saida(
   tabela_exploratoria,
-  "objetos/tabela_benchmark_glm_rf_sem_balanceamento_exploratorio.rds"
+  "exploratorio",
+  "tabela_benchmark_glm_rf_sem_balanceamento_exploratorio.rds",
+  subpastas = "benchmark"
 )
-readr::write_csv(
+salvar_csv_saida(
   tabela_exploratoria,
-  "resultados/tabela_benchmark_glm_rf_sem_balanceamento_exploratorio.csv"
+  "exploratorio",
+  "tabela_benchmark_glm_rf_sem_balanceamento_exploratorio.csv",
+  subpastas = "benchmark"
 )
 
-saveRDS(tabela_benchmark, "objetos/tabela_benchmark_glm_rf_sem_balanceamento.rds")
-readr::write_csv(tabela_benchmark, "resultados/tabela_benchmark_glm_rf_sem_balanceamento.csv")
-
-ggplot2::ggsave(
-  filename = "figuras/roc_glm_rf_subconjuntos_sem_balanceamento.png",
-  plot = grafico_roc_modelos,
-  width = 8,
-  height = 5
+salvar_rds_saida(
+  tabela_benchmark,
+  "confirmacao",
+  "tabela_benchmark_glm_rf_sem_balanceamento.rds",
+  subpastas = "benchmark"
+)
+salvar_csv_saida(
+  tabela_benchmark,
+  "confirmacao",
+  "tabela_benchmark_glm_rf_sem_balanceamento.csv",
+  subpastas = "benchmark"
 )
 
-ggplot2::ggsave(
-  filename = "figuras/f1_glm_rf_subconjuntos_sem_balanceamento.png",
-  plot = grafico_f1_modelos,
+salvar_figura_saida(
+  plot = grafico_benchmark_tecnico,
+  fase = "confirmacao",
+  arquivo = "roc_benchmark_glm_rf_tecnico.png",
+  subpastas = "benchmark",
+  classificacao = "tecnico",
   width = 8,
   height = 5
 )

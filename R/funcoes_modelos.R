@@ -427,8 +427,9 @@ selecionar_melhor_cenario_por_modelo <- function(tabela, agrupadores = "Modelo")
   )
 }
 
-carregar_curva_topn <- function(caminhos) {
-  caminhos_existentes <- caminhos[file.exists(caminhos)]
+carregar_curva_topn <- function(caminhos_preferenciais, legados = character()) {
+  candidatos <- unique(c(caminhos_preferenciais, legados))
+  caminhos_existentes <- candidatos[file.exists(candidatos)]
 
   if (length(caminhos_existentes) == 0) {
     return(NULL)
@@ -461,15 +462,27 @@ obter_topn_candidatos <- function(
   fallback_validos <- sort(unique(fallback_topn[fallback_topn >= 1 & fallback_topn <= n_total]))
 
   if (usar_guias) {
-    melhor_glm <- obter_melhor_topn_curva(carregar_curva_topn(c(
-      "objetos/melhor_topn_glm.rds",
-      "objetos/curva_topn_glm.rds"
-    )))
+    melhor_glm <- obter_melhor_topn_curva(carregar_curva_topn(
+      caminhos_preferenciais = c(
+        caminho_objeto_saida("exploratorio", "melhor_topn_glm.rds", subpastas = "topn"),
+        caminho_objeto_saida("exploratorio", "curva_topn_glm.rds", subpastas = "topn")
+      ),
+      legados = c(
+        "objetos/melhor_topn_glm.rds",
+        "objetos/curva_topn_glm.rds"
+      )
+    ))
 
-    melhor_xgb <- obter_melhor_topn_curva(carregar_curva_topn(c(
-      "objetos/melhor_topn_xgboost.rds",
-      "objetos/curva_topn_xgboost.rds"
-    )))
+    melhor_xgb <- obter_melhor_topn_curva(carregar_curva_topn(
+      caminhos_preferenciais = c(
+        caminho_objeto_saida("exploratorio", "melhor_topn_xgboost.rds", subpastas = "topn"),
+        caminho_objeto_saida("exploratorio", "curva_topn_xgboost.rds", subpastas = "topn")
+      ),
+      legados = c(
+        "objetos/melhor_topn_xgboost.rds",
+        "objetos/curva_topn_xgboost.rds"
+      )
+    ))
 
     if (all(is.finite(c(melhor_glm, melhor_xgb)))) {
       offsets <- seq.int(-vizinhanca, vizinhanca)

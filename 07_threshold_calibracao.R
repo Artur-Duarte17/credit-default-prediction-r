@@ -15,22 +15,45 @@ source("R/funcoes_modelos.R")
 # BLOCO 1 - Carregar treino e tabelas confirmadas
 # ------------------------------------------------------------------------------
 treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
-tabela_benchmark <- readRDS("objetos/tabela_benchmark_modelos_sem_balanceamento.rds")
+tabela_benchmark <- ler_rds_saida(
+  "confirmacao",
+  "tabela_benchmark_modelos_sem_balanceamento.rds",
+  subpastas = "benchmark",
+  legados = "objetos/tabela_benchmark_modelos_sem_balanceamento.rds"
+)
 
 carregar_balanceamentos <- function() {
-  caminhos <- c(
-    "objetos/tabela_rf_balanceamento_smotenc.rds",
-    "objetos/tabela_xgb_balanceamento_smotenc.rds",
-    "objetos/tabela_modelos_caret_balanceamento_smotenc.rds"
+  caminhos <- list(
+    c(
+      caminho_objeto_saida("confirmacao", "tabela_rf_balanceamento_smotenc.rds", subpastas = "balanceamento"),
+      "objetos/tabela_rf_balanceamento_smotenc.rds"
+    ),
+    c(
+      caminho_objeto_saida("confirmacao", "tabela_xgb_balanceamento_smotenc.rds", subpastas = "balanceamento"),
+      "objetos/tabela_xgb_balanceamento_smotenc.rds"
+    ),
+    c(
+      caminho_objeto_saida("confirmacao", "tabela_modelos_caret_balanceamento_smotenc.rds", subpastas = "balanceamento"),
+      "objetos/tabela_modelos_caret_balanceamento_smotenc.rds"
+    )
   )
+  tabelas <- lapply(caminhos, function(candidatos) {
+    existentes <- candidatos[file.exists(candidatos)]
 
-  existentes <- caminhos[file.exists(caminhos)]
+    if (length(existentes) == 0) {
+      return(NULL)
+    }
 
-  if (length(existentes) == 0) {
+    readRDS(existentes[1])
+  })
+
+  tabelas <- Filter(Negate(is.null), tabelas)
+
+  if (length(tabelas) == 0) {
     return(NULL)
   }
 
-  dplyr::bind_rows(lapply(existentes, readRDS))
+  dplyr::bind_rows(tabelas)
 }
 
 tabela_balanceamento <- carregar_balanceamentos()
@@ -190,18 +213,31 @@ print(grafico_metricas_threshold)
 # ------------------------------------------------------------------------------
 # BLOCO 6 - Salvar resultados
 # ------------------------------------------------------------------------------
-saveRDS(tabela_thresholds, "objetos/tabela_thresholds_finais.rds")
-readr::write_csv(tabela_thresholds, "resultados/tabela_thresholds_finais.csv")
+salvar_rds_saida(tabela_thresholds, "final", "tabela_thresholds_finais.rds", subpastas = "threshold")
+salvar_csv_saida(tabela_thresholds, "final", "tabela_thresholds_finais.csv", subpastas = "threshold")
 
-saveRDS(configs_finalistas, "objetos/config_modelos_finalistas_confirmacao.rds")
-readr::write_csv(configs_finalistas, "resultados/config_modelos_finalistas_confirmacao.csv")
+salvar_rds_saida(
+  configs_finalistas,
+  "final",
+  "config_modelos_finalistas_confirmacao.rds",
+  subpastas = "threshold"
+)
+salvar_csv_saida(
+  configs_finalistas,
+  "final",
+  "config_modelos_finalistas_confirmacao.csv",
+  subpastas = "threshold"
+)
 
-saveRDS(config_modelos, "objetos/config_modelos_finais.rds")
-readr::write_csv(config_modelos, "resultados/config_modelos_finais.csv")
+salvar_rds_saida(config_modelos, "final", "config_modelos_finais.rds", subpastas = "threshold")
+salvar_csv_saida(config_modelos, "final", "config_modelos_finais.csv", subpastas = "threshold")
 
-ggplot2::ggsave(
-  filename = "figuras/comparacao_thresholds_finais.png",
+salvar_figura_saida(
   plot = grafico_metricas_threshold,
+  fase = "final",
+  arquivo = "comparacao_thresholds_principal.png",
+  subpastas = "threshold",
+  classificacao = "principal",
   width = 14,
   height = 8
 )

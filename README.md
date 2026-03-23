@@ -195,40 +195,108 @@ O split 70/30 permanece como padrao operacional do pipeline. O split 80/20 e man
 
 ## Outputs gerados
 
-### `objetos/`
+O pipeline agora separa os artefatos por categoria analitica e por tipo de evidencia.
 
-Armazena artefatos `RDS` usados entre scripts:
+### Estrutura principal
 
-- bases limpas e preprocessadas;
-- splits de treino e teste;
-- curvas Top-N;
-- tabelas de benchmark exploratorio e confirmado;
-- configuracoes finais;
-- resultados de threshold;
-- tabelas finais de teste;
-- objetos auxiliares de interpretabilidade.
+- `objetos/exploratorio/`
+- `objetos/confirmacao/`
+- `objetos/final/`
+- `objetos/interpretabilidade/`
+- `resultados/exploratorio/`
+- `resultados/confirmacao/`
+- `resultados/final/`
+- `resultados/interpretabilidade/`
+- `figuras/exploratorio/`
+- `figuras/confirmacao/`
+- `figuras/final/`
+- `figuras/interpretabilidade/`
+- `figuras/suplementares/`
 
-### `resultados/`
+### Subpastas tematicas usadas pelo pipeline
 
-Armazena tabelas `CSV` para consumo analitico e auditoria:
+- `exploratorio/topn/`
+- `confirmacao/benchmark/`
+- `confirmacao/balanceamento/`
+- `final/threshold/`
+- `final/teste/`
+- `interpretabilidade/shap/`
 
-- rankings de variaveis;
-- curvas e tabelas Top-N;
-- benchmarks sem balanceamento;
-- comparacoes com `SMOTENC`;
-- thresholds calibrados;
-- resultados finais de teste;
-- tabelas SHAP e comparacao com Elastic Net.
+### Leitura pratica da taxonomia
 
-### `figuras/`
+- `objetos/`: artefatos `RDS` usados entre etapas.
+- `resultados/`: tabelas `CSV` para auditoria e consumo analitico.
+- `figuras/`: figuras principais, prontas para leitura final.
+- `figuras/suplementares/`: figuras opcionais, uteis para anexo, apendice ou debug controlado.
 
-Armazena graficos exportados:
+### Compatibilidade
 
-- curvas ROC;
-- comparacoes por subconjunto e modelo;
-- comparacoes de threshold;
-- desempenho final em teste;
-- visualizacoes SHAP.
+Os scripts 04 a 10 passam a salvar nas novas subpastas, mas a leitura usa fallback para caminhos legados quando necessario. Isso permite transicao sem quebrar execucoes antigas ja materializadas no repositorio.
+
+### Flags de exportacao visual
+
+No `00_setup.R`:
+
+- `SALVAR_FIGURAS_SUPLEMENTARES <- FALSE`
+- `SALVAR_FIGURAS_TECNICAS <- FALSE`
+
+Por padrao, o pipeline salva apenas as figuras principais. Figuras suplementares e tecnicas podem ser reativadas alterando essas flags.
+
+## Classificacao das figuras
+
+### Figuras principais
+
+Sao as figuras mais uteis para leitura final, relatorio e auditoria executiva:
+
+- `figuras/exploratorio/topn/roc_topn_glm_principal.png`
+- `figuras/exploratorio/topn/roc_topn_xgboost_principal.png`
+- `figuras/confirmacao/benchmark/roc_benchmark_confirmado_principal.png`
+- `figuras/confirmacao/balanceamento/roc_balanceamento_confirmado_principal.png`
+- `figuras/final/threshold/comparacao_thresholds_principal.png`
+- `figuras/final/teste/comparacao_metricas_teste_principal.png`
+- `figuras/final/teste/curvas_roc_teste_principal.png`
+- `figuras/interpretabilidade/shap/shap_importancia_principal.png`
+
+### Figuras suplementares
+
+Sao uteis para apendice ou revisao detalhada, mas nao entram no fluxo padrao:
+
+- `top10_topn_glm_suplementar.png`
+- `top10_topn_xgboost_suplementar.png`
+- `roc_topn_modelos_caret_suplementar.png`
+- `shap_beeswarm_suplementar.png`
+- `shap_dependencia_pay0_suplementar.png`
+- `shap_waterfall_exemplo_suplementar.png`
+
+### Figuras tecnicas
+
+Sao graficos mantidos apenas para rastreabilidade quando as flags tecnicas forem ativadas:
+
+- benchmark tecnico de `05A`
+- benchmark tecnico de `05B`
+- benchmark tecnico de `05C`
+
+Essas figuras deixaram de ser principais porque repetiam informacao ja coberta pelas tabelas confirmadas e pelo benchmark consolidado de `05D`.
+
+## Estrategia de visualizacao
+
+As figuras foram revisadas para evitar redundancia e escolhas graficas ruins:
+
+- Curvas Top-N completas continuam em linha apenas para GLM e XGBoost, onde a ideia de saturacao por `k` faz sentido.
+- Top-N candidatos de RF/SVM/redes deixaram de usar linha por default e passaram para pontos, porque ha poucos valores de `k`.
+- Benchmarks intermediarios deixaram de gerar pares repetidos `ROC` e `F1` em figuras separadas. `ROC` fica como foco visual; `F1` permanece nas tabelas.
+- Comparacoes de balanceamento passaram para um unico grafico principal consolidado, em vez de varias figuras quase equivalentes.
+- O grafico final de teste deixou de usar barras com muitos rotulos e passou para pontos por metrica, reduzindo poluicao visual.
+- O SHAP principal ficou restrito ao barplot de importancia; beeswarm, dependence e waterfall foram movidos para suplementares.
+
+## Nota sobre poluicao visual
+
+O pipeline foi ajustado para:
+
+- eliminar `geom_text()` desnecessario em figuras cheias;
+- usar `show.legend = FALSE` nas poucas camadas de rotulo restantes;
+- evitar linhas em comparacoes com poucos pontos;
+- reduzir titulos repetitivos e nomes de arquivos pouco informativos.
 
 ## Nota metodologica sobre SMOTENC
 

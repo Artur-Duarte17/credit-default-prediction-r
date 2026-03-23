@@ -11,8 +11,18 @@ source("R/funcoes_modelos.R")
 # ------------------------------------------------------------------------------
 treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
 teste <- garantir_ordem_classe(readRDS("objetos/teste.rds"))
-tabela_teste <- readRDS("objetos/tabela_teste_final.rds")
-config_modelos <- readRDS("objetos/config_modelos_finais.rds")
+tabela_teste <- ler_rds_saida(
+  "final",
+  "tabela_teste_final.rds",
+  subpastas = "teste",
+  legados = "objetos/tabela_teste_final.rds"
+)
+config_modelos <- ler_rds_saida(
+  "final",
+  "config_modelos_finais.rds",
+  subpastas = "threshold",
+  legados = "objetos/config_modelos_finais.rds"
+)
 ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
 
 melhor_cenario_teste <- tabela_teste %>%
@@ -210,46 +220,82 @@ if (nrow(top_diferencas) > 0) {
   }
 }
 
-writeLines(linhas_interpretacao, "docs/analise_interpretabilidade.md")
+salvar_texto_saida(
+  linhas_interpretacao,
+  "analise_interpretabilidade.md",
+  subpastas = "interpretabilidade"
+)
 
 # ------------------------------------------------------------------------------
 # BLOCO 8 - Salvar resultados
 # ------------------------------------------------------------------------------
-saveRDS(tabela_shap_agregada, "objetos/tabela_shap_final.rds")
-readr::write_csv(tabela_shap_agregada, "resultados/tabela_shap_final.csv")
-readr::write_csv(top10_shap, "resultados/top10_shap_final.csv")
+salvar_rds_saida(tabela_shap_agregada, "interpretabilidade", "tabela_shap_final.rds", subpastas = "shap")
+salvar_csv_saida(tabela_shap_agregada, "interpretabilidade", "tabela_shap_final.csv", subpastas = "shap")
+salvar_csv_saida(top10_shap, "interpretabilidade", "top10_shap_final.csv", subpastas = "shap")
 
-saveRDS(tabela_shap_vs_enet, "objetos/tabela_shap_vs_elastic_net.rds")
-readr::write_csv(tabela_shap_vs_enet, "resultados/tabela_shap_vs_elastic_net.csv")
+salvar_rds_saida(
+  tabela_shap_vs_enet,
+  "interpretabilidade",
+  "tabela_shap_vs_elastic_net.rds",
+  subpastas = "shap"
+)
+salvar_csv_saida(
+  tabela_shap_vs_enet,
+  "interpretabilidade",
+  "tabela_shap_vs_elastic_net.csv",
+  subpastas = "shap"
+)
 
-saveRDS(metadata_shap, "objetos/metadata_shap_modelo.rds")
-readr::write_csv(metadata_shap, "resultados/metadata_shap_modelo.csv")
+salvar_rds_saida(
+  metadata_shap,
+  "interpretabilidade",
+  "metadata_shap_modelo.rds",
+  subpastas = "shap"
+)
+salvar_csv_saida(
+  metadata_shap,
+  "interpretabilidade",
+  "metadata_shap_modelo.csv",
+  subpastas = "shap"
+)
 
-ggplot2::ggsave(
-  filename = "figuras/shap_importancia_top10.png",
+salvar_figura_saida(
   plot = grafico_shap_importancia,
+  fase = "interpretabilidade",
+  arquivo = "shap_importancia_principal.png",
+  subpastas = "shap",
+  classificacao = "principal",
   width = 8,
   height = 5
 )
 
-ggplot2::ggsave(
-  filename = "figuras/shap_beeswarm_top10.png",
+salvar_figura_saida(
   plot = grafico_shap_bee,
+  fase = "interpretabilidade",
+  arquivo = "shap_beeswarm_suplementar.png",
+  subpastas = "shap",
+  classificacao = "suplementar",
   width = 9,
   height = 6
 )
 
-ggplot2::ggsave(
-  filename = "figuras/shap_dependencia_pay0.png",
+salvar_figura_saida(
   plot = grafico_dependencia,
+  fase = "interpretabilidade",
+  arquivo = "shap_dependencia_pay0_suplementar.png",
+  subpastas = "shap",
+  classificacao = "suplementar",
   width = 8,
   height = 5
 )
 
 if (!is.null(grafico_waterfall)) {
-  ggplot2::ggsave(
-    filename = "figuras/shap_waterfall_exemplo.png",
+  salvar_figura_saida(
     plot = grafico_waterfall,
+    fase = "interpretabilidade",
+    arquivo = "shap_waterfall_exemplo_suplementar.png",
+    subpastas = "shap",
+    classificacao = "suplementar",
     width = 9,
     height = 5
   )

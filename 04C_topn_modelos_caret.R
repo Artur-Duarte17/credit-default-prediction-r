@@ -105,59 +105,38 @@ print(top10_topn_modelos)
 # ------------------------------------------------------------------------------
 # BLOCO 3 - Graficos
 # ------------------------------------------------------------------------------
-grafico_curvas_topn <- ggplot2::ggplot(
+grafico_topn_candidatos <- ggplot2::ggplot(
   curva_topn_modelos,
   ggplot2::aes(x = TopN, y = ROC, color = Modelo)
 ) +
-  ggplot2::geom_line(linewidth = 1) +
-  ggplot2::geom_point(size = 1.7) +
+  ggplot2::geom_point(size = 2.3) +
+  ggplot2::facet_wrap(~ Modelo, scales = "free_x") +
   ggplot2::labs(
-    title = "Curvas Top-N candidatas por modelo",
+    title = "Top-N candidatos por modelo",
     subtitle = "RF, SVM radial e redes com reducao guiada por GLM e XGBoost",
     x = "Quantidade de variaveis",
     y = "ROC"
   ) +
   ggplot2::theme_minimal()
 
-grafico_top10_modelos <- ggplot2::ggplot(
-  top10_topn_modelos,
-  ggplot2::aes(
-    x = ROC,
-    y = reorder(paste0(Modelo, " / Top-", TopN), ROC),
-    fill = Modelo
-  )
-) +
-  ggplot2::geom_col() +
-  ggplot2::labs(
-    title = "Top subconjuntos por modelo",
-    x = "ROC",
-    y = NULL
-  ) +
-  ggplot2::theme_minimal()
-
-print(grafico_curvas_topn)
-print(grafico_top10_modelos)
+print(grafico_topn_candidatos)
 
 # ------------------------------------------------------------------------------
 # BLOCO 4 - Salvar resultados
 # ------------------------------------------------------------------------------
-saveRDS(curva_topn_modelos, "objetos/curva_topn_modelos_caret.rds")
-saveRDS(topn_utilizados, "objetos/topn_candidatos_modelos_caret.rds")
+salvar_rds_saida(curva_topn_modelos, "exploratorio", "curva_topn_modelos_caret.rds", subpastas = "topn")
+salvar_rds_saida(topn_utilizados, "exploratorio", "topn_candidatos_modelos_caret.rds", subpastas = "topn")
 
-readr::write_csv(curva_topn_modelos, "resultados/curva_topn_modelos_caret.csv")
-readr::write_csv(top10_topn_modelos, "resultados/top10_topn_modelos_caret.csv")
-readr::write_csv(topn_utilizados, "resultados/topn_candidatos_modelos_caret.csv")
+salvar_csv_saida(curva_topn_modelos, "exploratorio", "curva_topn_modelos_caret.csv", subpastas = "topn")
+salvar_csv_saida(top10_topn_modelos, "exploratorio", "top10_topn_modelos_caret.csv", subpastas = "topn")
+salvar_csv_saida(topn_utilizados, "exploratorio", "topn_candidatos_modelos_caret.csv", subpastas = "topn")
 
-ggplot2::ggsave(
-  filename = "figuras/curva_roc_topn_modelos_caret.png",
-  plot = grafico_curvas_topn,
-  width = 10,
-  height = 6
-)
-
-ggplot2::ggsave(
-  filename = "figuras/top10_melhores_subconjuntos_modelos_caret.png",
-  plot = grafico_top10_modelos,
+salvar_figura_saida(
+  plot = grafico_topn_candidatos,
+  fase = "exploratorio",
+  arquivo = "roc_topn_modelos_caret_suplementar.png",
+  subpastas = "topn",
+  classificacao = "suplementar",
   width = 10,
   height = 6
 )

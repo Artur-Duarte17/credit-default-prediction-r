@@ -12,7 +12,12 @@ source("R/funcoes_modelos.R")
 # BLOCO 1 - Carregar dados e finalista confirmado
 # ------------------------------------------------------------------------------
 treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
-tabela_xgb_confirmada <- readRDS("objetos/tabela_xgboost_subconjuntos_sem_balanceamento.rds") %>%
+tabela_xgb_confirmada <- ler_rds_saida(
+  "confirmacao",
+  "tabela_xgboost_subconjuntos_sem_balanceamento.rds",
+  subpastas = "benchmark",
+  legados = "objetos/tabela_xgboost_subconjuntos_sem_balanceamento.rds"
+) %>%
   dplyr::filter(Modelo == "XGBoost")
 
 finalistas_xgb <- selecionar_finalistas_modelagem(
@@ -111,8 +116,14 @@ tabela_xgb_balanceamento <- dplyr::bind_rows(resultados) %>%
   ) %>%
   dplyr::arrange(Subconjunto, desc(ROC), desc(F1), desc(GMean))
 
-if (file.exists("objetos/tabela_rf_balanceamento_smotenc.rds")) {
-  tabela_rf <- readRDS("objetos/tabela_rf_balanceamento_smotenc.rds")
+if (file.exists(caminho_objeto_saida("confirmacao", "tabela_rf_balanceamento_smotenc.rds", subpastas = "balanceamento")) ||
+    file.exists("objetos/tabela_rf_balanceamento_smotenc.rds")) {
+  tabela_rf <- ler_rds_saida(
+    "confirmacao",
+    "tabela_rf_balanceamento_smotenc.rds",
+    subpastas = "balanceamento",
+    legados = "objetos/tabela_rf_balanceamento_smotenc.rds"
+  )
   tabela_balanceamento_completa <- dplyr::bind_rows(tabela_rf, tabela_xgb_balanceamento) %>%
     dplyr::arrange(Modelo, Subconjunto, desc(ROC), desc(F1), desc(GMean))
 } else {
@@ -122,70 +133,32 @@ if (file.exists("objetos/tabela_rf_balanceamento_smotenc.rds")) {
 print(tabela_balanceamento_completa)
 
 # ------------------------------------------------------------------------------
-# BLOCO 4 - Graficos
+# BLOCO 4 - Salvar resultados
 # ------------------------------------------------------------------------------
-grafico_roc_balanceamento <- ggplot2::ggplot(
-  tabela_balanceamento_completa,
-  ggplot2::aes(x = Subconjunto, y = ROC, color = Cenario, group = Cenario)
-) +
-  ggplot2::geom_line() +
-  ggplot2::geom_point(size = 3) +
-  ggplot2::geom_text(
-    ggplot2::aes(label = round(ROC, 4)),
-    vjust = -0.8,
-    size = 3
-  ) +
-  ggplot2::facet_wrap(~ Modelo) +
-  ggplot2::labs(
-    title = "ROC: confirmacao do balanceamento por modelo",
-    x = "Subconjunto",
-    y = "ROC"
-  ) +
-  ggplot2::theme_minimal()
-
-grafico_f1_balanceamento <- ggplot2::ggplot(
-  tabela_balanceamento_completa,
-  ggplot2::aes(x = Subconjunto, y = F1, color = Cenario, group = Cenario)
-) +
-  ggplot2::geom_line() +
-  ggplot2::geom_point(size = 3) +
-  ggplot2::geom_text(
-    ggplot2::aes(label = round(F1, 4)),
-    vjust = -0.8,
-    size = 3
-  ) +
-  ggplot2::facet_wrap(~ Modelo) +
-  ggplot2::labs(
-    title = "F1: confirmacao do balanceamento por modelo",
-    x = "Subconjunto",
-    y = "F1"
-  ) +
-  ggplot2::theme_minimal()
-
-print(grafico_roc_balanceamento)
-print(grafico_f1_balanceamento)
-
-# ------------------------------------------------------------------------------
-# BLOCO 5 - Salvar resultados
-# ------------------------------------------------------------------------------
-saveRDS(tabela_xgb_balanceamento, "objetos/tabela_xgb_balanceamento_smotenc.rds")
-readr::write_csv(tabela_xgb_balanceamento, "resultados/tabela_xgb_balanceamento_smotenc.csv")
-
-saveRDS(tabela_balanceamento_completa, "objetos/tabela_rf_xgb_balanceamento_smotenc.rds")
-readr::write_csv(tabela_balanceamento_completa, "resultados/tabela_rf_xgb_balanceamento_smotenc.csv")
-
-ggplot2::ggsave(
-  filename = "figuras/roc_rf_xgb_balanceamento_smotenc.png",
-  plot = grafico_roc_balanceamento,
-  width = 10,
-  height = 5
+salvar_rds_saida(
+  tabela_xgb_balanceamento,
+  "confirmacao",
+  "tabela_xgb_balanceamento_smotenc.rds",
+  subpastas = "balanceamento"
+)
+salvar_csv_saida(
+  tabela_xgb_balanceamento,
+  "confirmacao",
+  "tabela_xgb_balanceamento_smotenc.csv",
+  subpastas = "balanceamento"
 )
 
-ggplot2::ggsave(
-  filename = "figuras/f1_rf_xgb_balanceamento_smotenc.png",
-  plot = grafico_f1_balanceamento,
-  width = 10,
-  height = 5
+salvar_rds_saida(
+  tabela_balanceamento_completa,
+  "confirmacao",
+  "tabela_rf_xgb_balanceamento_smotenc.rds",
+  subpastas = "balanceamento"
+)
+salvar_csv_saida(
+  tabela_balanceamento_completa,
+  "confirmacao",
+  "tabela_rf_xgb_balanceamento_smotenc.csv",
+  subpastas = "balanceamento"
 )
 
 message("06B_xgb_balanceamento_smotenc.R concluido com sucesso.")
