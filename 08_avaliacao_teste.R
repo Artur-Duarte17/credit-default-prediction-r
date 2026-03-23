@@ -14,13 +14,13 @@ source("R/funcoes_modelos.R")
 # ------------------------------------------------------------------------------
 # BLOCO 1 - Carregar dados e configuracoes finais
 # ------------------------------------------------------------------------------
-treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
-teste <- garantir_ordem_classe(readRDS("objetos/teste.rds"))
+treino <- garantir_ordem_classe(ler_rds_base("treino.rds"))
+teste <- garantir_ordem_classe(ler_rds_base("teste.rds"))
 config_modelos <- ler_rds_saida(
   "final",
   "config_modelos_finais.rds",
   subpastas = "threshold",
-  legados = "objetos/config_modelos_finais.rds"
+  legados = caminho_objeto_legado("config_modelos_finais.rds")
 )
 
 print(config_modelos)

@@ -9,7 +9,7 @@ source("R/funcoes_preprocessamento.R")
 # ------------------------------------------------------------------------------
 # BLOCO 1 - Carregar treino
 # ------------------------------------------------------------------------------
-treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
+treino <- garantir_ordem_classe(ler_rds_base("treino.rds"))
 
 # ------------------------------------------------------------------------------
 # BLOCO 2 - Criar matriz de preditores
@@ -136,14 +136,15 @@ print(grafico_top10_enet)
 # ------------------------------------------------------------------------------
 # BLOCO 9 - Salvar resultados
 # ------------------------------------------------------------------------------
-saveRDS(modelo_enet, "objetos/modelo_enet_ranking.rds")
-saveRDS(ranking_variaveis, "objetos/ranking_variaveis_enet.rds")
-readr::write_csv(ranking_variaveis, "resultados/ranking_variaveis_enet.csv")
-readr::write_csv(coef_df, "resultados/coeficientes_enet_dummies.csv")
+salvar_rds_base(modelo_enet, "modelo_enet_ranking.rds")
+salvar_rds_base(ranking_variaveis, "ranking_variaveis_enet.rds")
+salvar_csv_base(ranking_variaveis, "ranking_variaveis_enet.csv")
+salvar_csv_base(coef_df, "coeficientes_enet_dummies.csv")
 
-ggplot2::ggsave(
-  filename = "figuras/top10_ranking_enet.png",
+salvar_figura_base(
   plot = grafico_top10_enet,
+  arquivo = "top10_ranking_enet_principal.png",
+  classificacao = "principal",
   width = 8,
   height = 5
 )

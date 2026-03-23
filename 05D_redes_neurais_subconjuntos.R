@@ -11,8 +11,8 @@ source("R/funcoes_modelos.R")
 # ------------------------------------------------------------------------------
 # BLOCO 1 - Carregar dados e definir subconjuntos candidatos
 # ------------------------------------------------------------------------------
-treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
-ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+treino <- garantir_ordem_classe(ler_rds_base("treino.rds"))
+ranking_variaveis <- ler_rds_base("ranking_variaveis_enet.rds")
 
 ordem_variaveis <- ranking_variaveis$Variavel_Original
 topn_candidatos <- obter_topn_candidatos(ordem_variaveis = ordem_variaveis)
@@ -147,44 +147,38 @@ tabela_redes <- dplyr::bind_rows(resultados_confirmacao) %>%
   ) %>%
   ordenar_resultados_modelagem()
 
-if (file.exists(caminho_objeto_saida("confirmacao", "tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds", subpastas = "benchmark")) ||
-    file.exists("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds")) {
-  tabela_base <- ler_rds_saida(
-    "confirmacao",
-    "tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds",
-    subpastas = "benchmark",
-    legados = "objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds"
-  )
-} else if (file.exists(caminho_objeto_saida("confirmacao", "tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds", subpastas = "benchmark")) ||
-           file.exists("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds")) {
+tabela_base <- ler_rds_saida(
+  "confirmacao",
+  "tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds",
+  subpastas = "benchmark",
+  legados = caminho_objeto_legado("tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds"),
+  obrigatorio = FALSE
+)
+if (is.null(tabela_base)) {
   tabela_base <- ler_rds_saida(
     "confirmacao",
     "tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds",
     subpastas = "benchmark",
-    legados = "objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds"
+    legados = caminho_objeto_legado("tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds"),
+    obrigatorio = FALSE
   )
-} else {
-  tabela_base <- NULL
 }
 
-if (file.exists(caminho_objeto_saida("exploratorio", "tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds", subpastas = "benchmark")) ||
-    file.exists("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds")) {
-  tabela_base_expl <- ler_rds_saida(
-    "exploratorio",
-    "tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds",
-    subpastas = "benchmark",
-    legados = "objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds"
-  )
-} else if (file.exists(caminho_objeto_saida("exploratorio", "tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds", subpastas = "benchmark")) ||
-           file.exists("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds")) {
+tabela_base_expl <- ler_rds_saida(
+  "exploratorio",
+  "tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds",
+  subpastas = "benchmark",
+  legados = caminho_objeto_legado("tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds"),
+  obrigatorio = FALSE
+)
+if (is.null(tabela_base_expl)) {
   tabela_base_expl <- ler_rds_saida(
     "exploratorio",
     "tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds",
     subpastas = "benchmark",
-    legados = "objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds"
+    legados = caminho_objeto_legado("tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds"),
+    obrigatorio = FALSE
   )
-} else {
-  tabela_base_expl <- NULL
 }
 
 if (!is.null(tabela_base)) {

@@ -9,21 +9,21 @@ source("R/funcoes_modelos.R")
 # ------------------------------------------------------------------------------
 # BLOCO 1 - Carregar dados e identificar modelo vencedor
 # ------------------------------------------------------------------------------
-treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
-teste <- garantir_ordem_classe(readRDS("objetos/teste.rds"))
+treino <- garantir_ordem_classe(ler_rds_base("treino.rds"))
+teste <- garantir_ordem_classe(ler_rds_base("teste.rds"))
 tabela_teste <- ler_rds_saida(
   "final",
   "tabela_teste_final.rds",
   subpastas = "teste",
-  legados = "objetos/tabela_teste_final.rds"
+  legados = caminho_objeto_legado("tabela_teste_final.rds")
 )
 config_modelos <- ler_rds_saida(
   "final",
   "config_modelos_finais.rds",
   subpastas = "threshold",
-  legados = "objetos/config_modelos_finais.rds"
+  legados = caminho_objeto_legado("config_modelos_finais.rds")
 )
-ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+ranking_variaveis <- ler_rds_base("ranking_variaveis_enet.rds")
 
 melhor_cenario_teste <- tabela_teste %>%
   dplyr::slice(1)

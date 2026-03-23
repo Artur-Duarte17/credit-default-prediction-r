@@ -10,7 +10,7 @@ source("R/funcoes_preprocessamento.R")
 # ------------------------------------------------------------------------------
 # BLOCO 1 - Carregar base limpa
 # ------------------------------------------------------------------------------
-dados <- readRDS("objetos/dados_limpos.rds")
+dados <- ler_rds_base("dados_limpos.rds")
 
 # ------------------------------------------------------------------------------
 # BLOCO 2 - Tratar categorias problematicas

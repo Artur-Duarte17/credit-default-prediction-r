@@ -9,8 +9,8 @@ source("R/funcoes_modelos.R")
 # ------------------------------------------------------------------------------
 # BLOCO 1 - Carregar treino e ranking
 # ------------------------------------------------------------------------------
-treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
-ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+treino <- garantir_ordem_classe(ler_rds_base("treino.rds"))
+ranking_variaveis <- ler_rds_base("ranking_variaveis_enet.rds")
 
 ordem_variaveis <- ranking_variaveis$Variavel_Original
 n_total_variaveis <- length(ordem_variaveis)

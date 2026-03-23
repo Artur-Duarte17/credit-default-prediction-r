@@ -95,27 +95,29 @@ salvar_splits_estratificados <- function(
   splits,
   dados,
   proporcao_padrao = SPLIT_TREINO_PADRAO,
-  dir_base = "objetos/splits"
+  dir_base = "splits"
 ) {
-  if (!dir.exists(dir_base)) {
-    dir.create(dir_base, recursive = TRUE)
-  }
-
-  saveRDS(dados, "objetos/dados_preprocessados.rds")
+  salvar_rds_base(dados, "dados_preprocessados.rds")
 
   for (nome_split in names(splits)) {
     split_atual <- splits[[nome_split]]
     sufixo <- gsub("\\.", "", sprintf("p%02d", round(split_atual$proporcao_treino * 100)))
 
-    saveRDS(split_atual$treino, file.path(dir_base, paste0("treino_", sufixo, ".rds")))
-    saveRDS(split_atual$teste, file.path(dir_base, paste0("teste_", sufixo, ".rds")))
+    saveRDS(
+      split_atual$treino,
+      montar_caminho_saida("objetos", subpastas = dir_base, arquivo = paste0("treino_", sufixo, ".rds"))
+    )
+    saveRDS(
+      split_atual$teste,
+      montar_caminho_saida("objetos", subpastas = dir_base, arquivo = paste0("teste_", sufixo, ".rds"))
+    )
   }
 
   nome_padrao <- as.character(proporcao_padrao)
   split_padrao <- splits[[nome_padrao]]
 
-  saveRDS(split_padrao$treino, "objetos/treino.rds")
-  saveRDS(split_padrao$teste, "objetos/teste.rds")
+  salvar_rds_base(split_padrao$treino, "treino.rds")
+  salvar_rds_base(split_padrao$teste, "teste.rds")
 }
 
 preparar_receita_smotenc <- function(

@@ -428,14 +428,11 @@ selecionar_melhor_cenario_por_modelo <- function(tabela, agrupadores = "Modelo")
 }
 
 carregar_curva_topn <- function(caminhos_preferenciais, legados = character()) {
-  candidatos <- unique(c(caminhos_preferenciais, legados))
-  caminhos_existentes <- candidatos[file.exists(candidatos)]
-
-  if (length(caminhos_existentes) == 0) {
-    return(NULL)
-  }
-
-  readRDS(caminhos_existentes[1])
+  ler_rds_caminho(
+    caminho_preferencial = caminhos_preferenciais[1],
+    legados = unique(c(caminhos_preferenciais[-1], legados)),
+    obrigatorio = FALSE
+  )
 }
 
 obter_melhor_topn_curva <- function(curva_topn) {
@@ -468,8 +465,8 @@ obter_topn_candidatos <- function(
         caminho_objeto_saida("exploratorio", "curva_topn_glm.rds", subpastas = "topn")
       ),
       legados = c(
-        "objetos/melhor_topn_glm.rds",
-        "objetos/curva_topn_glm.rds"
+        caminho_objeto_legado("melhor_topn_glm.rds"),
+        caminho_objeto_legado("curva_topn_glm.rds")
       )
     ))
 
@@ -479,8 +476,8 @@ obter_topn_candidatos <- function(
         caminho_objeto_saida("exploratorio", "curva_topn_xgboost.rds", subpastas = "topn")
       ),
       legados = c(
-        "objetos/melhor_topn_xgboost.rds",
-        "objetos/curva_topn_xgboost.rds"
+        caminho_objeto_legado("melhor_topn_xgboost.rds"),
+        caminho_objeto_legado("curva_topn_xgboost.rds")
       )
     ))
 

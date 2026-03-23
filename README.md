@@ -199,14 +199,17 @@ O pipeline agora separa os artefatos por categoria analitica e por tipo de evide
 
 ### Estrutura principal
 
+- `objetos/base/`
 - `objetos/exploratorio/`
 - `objetos/confirmacao/`
 - `objetos/final/`
 - `objetos/interpretabilidade/`
+- `resultados/base/`
 - `resultados/exploratorio/`
 - `resultados/confirmacao/`
 - `resultados/final/`
 - `resultados/interpretabilidade/`
+- `figuras/base/`
 - `figuras/exploratorio/`
 - `figuras/confirmacao/`
 - `figuras/final/`
@@ -224,14 +227,33 @@ O pipeline agora separa os artefatos por categoria analitica e por tipo de evide
 
 ### Leitura pratica da taxonomia
 
-- `objetos/`: artefatos `RDS` usados entre etapas.
+- `objetos/base/`: artefatos-base compartilhados por varias etapas do pipeline.
+- `objetos/`: artefatos `RDS` das fases analiticas posteriores.
 - `resultados/`: tabelas `CSV` para auditoria e consumo analitico.
 - `figuras/`: figuras principais, prontas para leitura final.
 - `figuras/suplementares/`: figuras opcionais, uteis para anexo, apendice ou debug controlado.
 
+### Artefatos-base do pipeline
+
+Os artefatos-base agora ficam em `objetos/base/` e sao lidos pelos helpers do `00_setup.R`, principalmente:
+
+- `dados_limpos.rds`
+- `dados_preprocessados.rds`
+- `treino.rds`
+- `teste.rds`
+- `modelo_enet_ranking.rds`
+- `ranking_variaveis_enet.rds`
+
+Na mesma logica, tabelas e figuras de preparacao ficam em `resultados/base/` e `figuras/base/`.
+
 ### Compatibilidade
 
-Os scripts 04 a 10 passam a salvar nas novas subpastas, mas a leitura usa fallback para caminhos legados quando necessario. Isso permite transicao sem quebrar execucoes antigas ja materializadas no repositorio.
+Os scripts passam a priorizar os caminhos novos, mas a leitura ainda aceita fallback legado temporario quando necessario. Em termos praticos:
+
+- `ler_rds_base()` tenta primeiro `objetos/base/arquivo.rds` e, se nao encontrar, aceita `objetos/arquivo.rds`.
+- `ler_rds_saida()` tenta primeiro a subpasta nova da fase e, quando configurado, aceita o artefato legado equivalente no topo de `objetos/`.
+
+Isso permite transicao sem quebrar execucoes antigas ja materializadas no repositorio, ao mesmo tempo em que elimina o estado hibrido de escrita nova com leitura antiga.
 
 ### Flags de exportacao visual
 

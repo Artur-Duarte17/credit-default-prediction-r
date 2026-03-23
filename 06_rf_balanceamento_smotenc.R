@@ -11,12 +11,12 @@ source("R/funcoes_modelos.R")
 # ------------------------------------------------------------------------------
 # BLOCO 1 - Carregar dados e finalista confirmado
 # ------------------------------------------------------------------------------
-treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
+treino <- garantir_ordem_classe(ler_rds_base("treino.rds"))
 tabela_rf_confirmada <- ler_rds_saida(
   "confirmacao",
   "tabela_benchmark_glm_rf_sem_balanceamento.rds",
   subpastas = "benchmark",
-  legados = "objetos/tabela_benchmark_glm_rf_sem_balanceamento.rds"
+  legados = caminho_objeto_legado("tabela_benchmark_glm_rf_sem_balanceamento.rds")
 ) %>%
   dplyr::filter(Modelo == "RF")
 

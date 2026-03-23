@@ -14,38 +14,38 @@ source("R/funcoes_modelos.R")
 # ------------------------------------------------------------------------------
 # BLOCO 1 - Carregar treino e tabelas confirmadas
 # ------------------------------------------------------------------------------
-treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
+treino <- garantir_ordem_classe(ler_rds_base("treino.rds"))
 tabela_benchmark <- ler_rds_saida(
   "confirmacao",
   "tabela_benchmark_modelos_sem_balanceamento.rds",
   subpastas = "benchmark",
-  legados = "objetos/tabela_benchmark_modelos_sem_balanceamento.rds"
+  legados = caminho_objeto_legado("tabela_benchmark_modelos_sem_balanceamento.rds")
 )
 
 carregar_balanceamentos <- function() {
-  caminhos <- list(
-    c(
-      caminho_objeto_saida("confirmacao", "tabela_rf_balanceamento_smotenc.rds", subpastas = "balanceamento"),
-      "objetos/tabela_rf_balanceamento_smotenc.rds"
+  tabelas <- list(
+    ler_rds_saida(
+      "confirmacao",
+      "tabela_rf_balanceamento_smotenc.rds",
+      subpastas = "balanceamento",
+      legados = caminho_objeto_legado("tabela_rf_balanceamento_smotenc.rds"),
+      obrigatorio = FALSE
     ),
-    c(
-      caminho_objeto_saida("confirmacao", "tabela_xgb_balanceamento_smotenc.rds", subpastas = "balanceamento"),
-      "objetos/tabela_xgb_balanceamento_smotenc.rds"
+    ler_rds_saida(
+      "confirmacao",
+      "tabela_xgb_balanceamento_smotenc.rds",
+      subpastas = "balanceamento",
+      legados = caminho_objeto_legado("tabela_xgb_balanceamento_smotenc.rds"),
+      obrigatorio = FALSE
     ),
-    c(
-      caminho_objeto_saida("confirmacao", "tabela_modelos_caret_balanceamento_smotenc.rds", subpastas = "balanceamento"),
-      "objetos/tabela_modelos_caret_balanceamento_smotenc.rds"
+    ler_rds_saida(
+      "confirmacao",
+      "tabela_modelos_caret_balanceamento_smotenc.rds",
+      subpastas = "balanceamento",
+      legados = caminho_objeto_legado("tabela_modelos_caret_balanceamento_smotenc.rds"),
+      obrigatorio = FALSE
     )
   )
-  tabelas <- lapply(caminhos, function(candidatos) {
-    existentes <- candidatos[file.exists(candidatos)]
-
-    if (length(existentes) == 0) {
-      return(NULL)
-    }
-
-    readRDS(existentes[1])
-  })
 
   tabelas <- Filter(Negate(is.null), tabelas)
 

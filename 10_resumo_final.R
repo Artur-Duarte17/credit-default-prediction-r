@@ -10,59 +10,53 @@ tabela_teste <- ler_rds_saida(
   "final",
   "tabela_teste_final.rds",
   subpastas = "teste",
-  legados = "objetos/tabela_teste_final.rds"
+  legados = caminho_objeto_legado("tabela_teste_final.rds")
 )
 tabela_shap <- ler_rds_saida(
   "interpretabilidade",
   "tabela_shap_final.rds",
   subpastas = "shap",
-  legados = "objetos/tabela_shap_final.rds"
+  legados = caminho_objeto_legado("tabela_shap_final.rds")
 )
 tabela_shap_vs_enet <- ler_rds_saida(
   "interpretabilidade",
   "tabela_shap_vs_elastic_net.rds",
   subpastas = "shap",
-  legados = "objetos/tabela_shap_vs_elastic_net.rds"
+  legados = caminho_objeto_legado("tabela_shap_vs_elastic_net.rds")
 )
 
-if (file.exists(caminho_objeto_saida("interpretabilidade", "metadata_shap_modelo.rds", subpastas = "shap")) ||
-    file.exists("objetos/metadata_shap_modelo.rds")) {
-  metadata_shap <- ler_rds_saida(
-    "interpretabilidade",
-    "metadata_shap_modelo.rds",
-    subpastas = "shap",
-    legados = "objetos/metadata_shap_modelo.rds"
-  )
-} else {
-  metadata_shap <- NULL
-}
+metadata_shap <- ler_rds_saida(
+  "interpretabilidade",
+  "metadata_shap_modelo.rds",
+  subpastas = "shap",
+  legados = caminho_objeto_legado("metadata_shap_modelo.rds"),
+  obrigatorio = FALSE
+)
 
-if (file.exists(caminho_objeto_saida("confirmacao", "tabela_benchmark_modelos_sem_balanceamento.rds", subpastas = "benchmark")) ||
-    file.exists("objetos/tabela_benchmark_modelos_sem_balanceamento.rds")) {
-  tabela_benchmark_modelos <- ler_rds_saida(
-    "confirmacao",
-    "tabela_benchmark_modelos_sem_balanceamento.rds",
-    subpastas = "benchmark",
-    legados = "objetos/tabela_benchmark_modelos_sem_balanceamento.rds"
-  )
-} else if (file.exists(caminho_objeto_saida("confirmacao", "tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds", subpastas = "benchmark")) ||
-           file.exists("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds")) {
+tabela_benchmark_modelos <- ler_rds_saida(
+  "confirmacao",
+  "tabela_benchmark_modelos_sem_balanceamento.rds",
+  subpastas = "benchmark",
+  legados = caminho_objeto_legado("tabela_benchmark_modelos_sem_balanceamento.rds"),
+  obrigatorio = FALSE
+)
+if (is.null(tabela_benchmark_modelos)) {
   tabela_benchmark_modelos <- ler_rds_saida(
     "confirmacao",
     "tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds",
     subpastas = "benchmark",
-    legados = "objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds"
+    legados = caminho_objeto_legado("tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds"),
+    obrigatorio = FALSE
   )
-} else if (file.exists(caminho_objeto_saida("confirmacao", "tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds", subpastas = "benchmark")) ||
-           file.exists("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds")) {
+}
+if (is.null(tabela_benchmark_modelos)) {
   tabela_benchmark_modelos <- ler_rds_saida(
     "confirmacao",
     "tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds",
     subpastas = "benchmark",
-    legados = "objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds"
+    legados = caminho_objeto_legado("tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds"),
+    obrigatorio = FALSE
   )
-} else {
-  tabela_benchmark_modelos <- NULL
 }
 
 if (!is.null(tabela_benchmark_modelos)) {

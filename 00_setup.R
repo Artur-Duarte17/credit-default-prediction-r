@@ -35,7 +35,7 @@ pacman::p_load(
   shapviz
 )
 
-FASES_SAIDA <- c("exploratorio", "confirmacao", "final", "interpretabilidade")
+FASES_SAIDA <- c("base", "exploratorio", "confirmacao", "final", "interpretabilidade")
 CLASSIFICACOES_FIGURA <- c("principal", "suplementar", "tecnico")
 
 SALVAR_FIGURAS_SUPLEMENTARES <- FALSE
@@ -92,19 +92,56 @@ normalizar_componentes_caminho <- function(...) {
   partes
 }
 
-montar_caminho_saida <- function(diretorio_raiz, fase = NULL, arquivo = NULL, subpastas = NULL) {
+montar_caminho_arquivo <- function(
+  diretorio_raiz,
+  fase = NULL,
+  arquivo = NULL,
+  subpastas = NULL,
+  criar_dir = TRUE
+) {
   partes <- normalizar_componentes_caminho(diretorio_raiz, fase, subpastas, arquivo)
   caminho <- do.call(file.path, as.list(partes))
-  garantir_pasta(dirname(caminho))
+
+  if (isTRUE(criar_dir)) {
+    garantir_pasta(dirname(caminho))
+  }
+
   caminho
+}
+
+caminho_objeto_legado <- function(arquivo, subpastas = NULL) {
+  montar_caminho_arquivo(
+    "objetos",
+    arquivo = arquivo,
+    subpastas = subpastas,
+    criar_dir = FALSE
+  )
+}
+
+montar_caminho_saida <- function(diretorio_raiz, fase = NULL, arquivo = NULL, subpastas = NULL) {
+  montar_caminho_arquivo(
+    diretorio_raiz = diretorio_raiz,
+    fase = fase,
+    arquivo = arquivo,
+    subpastas = subpastas,
+    criar_dir = TRUE
+  )
 }
 
 caminho_objeto_saida <- function(fase, arquivo, subpastas = NULL) {
   montar_caminho_saida("objetos", fase = fase, arquivo = arquivo, subpastas = subpastas)
 }
 
+caminho_objeto_base <- function(arquivo, subpastas = NULL) {
+  caminho_objeto_saida("base", arquivo = arquivo, subpastas = subpastas)
+}
+
 caminho_resultado_saida <- function(fase, arquivo, subpastas = NULL) {
   montar_caminho_saida("resultados", fase = fase, arquivo = arquivo, subpastas = subpastas)
+}
+
+caminho_resultado_base <- function(arquivo, subpastas = NULL) {
+  caminho_resultado_saida("base", arquivo = arquivo, subpastas = subpastas)
 }
 
 caminho_figura_saida <- function(
@@ -128,15 +165,36 @@ caminho_figura_saida <- function(
   caminho
 }
 
+caminho_figura_base <- function(
+  arquivo,
+  subpastas = NULL,
+  classificacao = c("principal", "suplementar", "tecnico")
+) {
+  caminho_figura_saida(
+    fase = "base",
+    arquivo = arquivo,
+    subpastas = subpastas,
+    classificacao = classificacao
+  )
+}
+
 caminho_documento_saida <- function(arquivo, subpastas = NULL) {
   montar_caminho_saida("docs", arquivo = arquivo, subpastas = subpastas)
 }
 
-resolver_caminho_existente <- function(caminho_preferencial, legados = character()) {
+resolver_caminho_existente <- function(
+  caminho_preferencial,
+  legados = character(),
+  obrigatorio = TRUE
+) {
   candidatos <- unique(c(caminho_preferencial, legados))
   existentes <- candidatos[file.exists(candidatos)]
 
   if (length(existentes) == 0) {
+    if (!isTRUE(obrigatorio)) {
+      return(NULL)
+    }
+
     stop(
       sprintf(
         "Nenhum arquivo encontrado. Caminho esperado: %s",
@@ -149,13 +207,40 @@ resolver_caminho_existente <- function(caminho_preferencial, legados = character
   existentes[1]
 }
 
-ler_rds_saida <- function(fase, arquivo, subpastas = NULL, legados = character()) {
+ler_rds_caminho <- function(caminho_preferencial, legados = character(), obrigatorio = TRUE) {
   caminho <- resolver_caminho_existente(
-    caminho_preferencial = caminho_objeto_saida(fase, arquivo, subpastas = subpastas),
-    legados = legados
+    caminho_preferencial = caminho_preferencial,
+    legados = legados,
+    obrigatorio = obrigatorio
   )
 
+  if (is.null(caminho)) {
+    return(NULL)
+  }
+
   readRDS(caminho)
+}
+
+ler_rds_saida <- function(
+  fase,
+  arquivo,
+  subpastas = NULL,
+  legados = character(),
+  obrigatorio = TRUE
+) {
+  ler_rds_caminho(
+    caminho_preferencial = caminho_objeto_saida(fase, arquivo, subpastas = subpastas),
+    legados = legados,
+    obrigatorio = obrigatorio
+  )
+}
+
+ler_rds_base <- function(arquivo, subpastas = NULL, legados = character(), obrigatorio = TRUE) {
+  ler_rds_caminho(
+    caminho_preferencial = caminho_objeto_base(arquivo = arquivo, subpastas = subpastas),
+    legados = unique(c(legados, caminho_objeto_legado(arquivo = arquivo, subpastas = subpastas))),
+    obrigatorio = obrigatorio
+  )
 }
 
 salvar_rds_saida <- function(objeto, fase, arquivo, subpastas = NULL) {
@@ -164,10 +249,18 @@ salvar_rds_saida <- function(objeto, fase, arquivo, subpastas = NULL) {
   invisible(caminho)
 }
 
+salvar_rds_base <- function(objeto, arquivo, subpastas = NULL) {
+  salvar_rds_saida(objeto = objeto, fase = "base", arquivo = arquivo, subpastas = subpastas)
+}
+
 salvar_csv_saida <- function(tabela, fase, arquivo, subpastas = NULL) {
   caminho <- caminho_resultado_saida(fase = fase, arquivo = arquivo, subpastas = subpastas)
   readr::write_csv(tabela, caminho)
   invisible(caminho)
+}
+
+salvar_csv_base <- function(tabela, arquivo, subpastas = NULL) {
+  salvar_csv_saida(tabela = tabela, fase = "base", arquivo = arquivo, subpastas = subpastas)
 }
 
 deve_salvar_figura <- function(classificacao) {
@@ -214,6 +307,29 @@ salvar_figura_saida <- function(
   )
 
   invisible(caminho)
+}
+
+salvar_figura_base <- function(
+  plot,
+  arquivo,
+  subpastas = NULL,
+  classificacao = c("principal", "suplementar", "tecnico"),
+  width = 8,
+  height = 5,
+  dpi = 300,
+  ...
+) {
+  salvar_figura_saida(
+    plot = plot,
+    fase = "base",
+    arquivo = arquivo,
+    subpastas = subpastas,
+    classificacao = classificacao,
+    width = width,
+    height = height,
+    dpi = dpi,
+    ...
+  )
 }
 
 salvar_texto_saida <- function(linhas, arquivo, subpastas = NULL) {

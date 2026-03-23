@@ -94,6 +94,6 @@ summary(dados)
 # BLOCO 7 — Salvar base limpa
 # ------------------------------------------------------------------------------
 write_csv(dados, "dados/dados_limpos.csv")
-saveRDS(dados, "objetos/dados_limpos.rds")
+salvar_rds_base(dados, "dados_limpos.rds")
         
 message("01_dados.R concluído com sucesso.")        

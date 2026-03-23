@@ -11,12 +11,12 @@ source("R/funcoes_modelos.R")
 # ------------------------------------------------------------------------------
 # BLOCO 1 - Carregar dados e finalista confirmado
 # ------------------------------------------------------------------------------
-treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
+treino <- garantir_ordem_classe(ler_rds_base("treino.rds"))
 tabela_xgb_confirmada <- ler_rds_saida(
   "confirmacao",
   "tabela_xgboost_subconjuntos_sem_balanceamento.rds",
   subpastas = "benchmark",
-  legados = "objetos/tabela_xgboost_subconjuntos_sem_balanceamento.rds"
+  legados = caminho_objeto_legado("tabela_xgboost_subconjuntos_sem_balanceamento.rds")
 ) %>%
   dplyr::filter(Modelo == "XGBoost")
 
@@ -116,14 +116,14 @@ tabela_xgb_balanceamento <- dplyr::bind_rows(resultados) %>%
   ) %>%
   dplyr::arrange(Subconjunto, desc(ROC), desc(F1), desc(GMean))
 
-if (file.exists(caminho_objeto_saida("confirmacao", "tabela_rf_balanceamento_smotenc.rds", subpastas = "balanceamento")) ||
-    file.exists("objetos/tabela_rf_balanceamento_smotenc.rds")) {
-  tabela_rf <- ler_rds_saida(
-    "confirmacao",
-    "tabela_rf_balanceamento_smotenc.rds",
-    subpastas = "balanceamento",
-    legados = "objetos/tabela_rf_balanceamento_smotenc.rds"
-  )
+tabela_rf <- ler_rds_saida(
+  "confirmacao",
+  "tabela_rf_balanceamento_smotenc.rds",
+  subpastas = "balanceamento",
+  legados = caminho_objeto_legado("tabela_rf_balanceamento_smotenc.rds"),
+  obrigatorio = FALSE
+)
+if (!is.null(tabela_rf)) {
   tabela_balanceamento_completa <- dplyr::bind_rows(tabela_rf, tabela_xgb_balanceamento) %>%
     dplyr::arrange(Modelo, Subconjunto, desc(ROC), desc(F1), desc(GMean))
 } else {
