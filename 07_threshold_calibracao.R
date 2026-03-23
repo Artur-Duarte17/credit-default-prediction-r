@@ -1,6 +1,7 @@
 # ==============================================================================
 # 07_threshold_calibracao.R
-# Responsabilidade: calibrar thresholds via OOF para todos os modelos finais.
+# Responsabilidade: calibrar thresholds via OOF apenas para os finalistas
+# confirmados. A selecao do threshold continua fora do teste final.
 # Observacao de negocio:
 # Em credito, perder um inadimplente (falso negativo) tende a custar mais do que
 # barrar um bom pagador (falso positivo). Por isso sensibilidade precisa ser
@@ -11,7 +12,7 @@ source("00_setup.R")
 source("R/funcoes_modelos.R")
 
 # ------------------------------------------------------------------------------
-# BLOCO 1 - Carregar treino e tabelas de benchmark
+# BLOCO 1 - Carregar treino e tabelas confirmadas
 # ------------------------------------------------------------------------------
 treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
 tabela_benchmark <- readRDS("objetos/tabela_benchmark_modelos_sem_balanceamento.rds")
@@ -33,56 +34,52 @@ carregar_balanceamentos <- function() {
 }
 
 tabela_balanceamento <- carregar_balanceamentos()
+folds_confirmacao <- criar_folds_estratificados(
+  y = treino$Class,
+  fase = "confirmacao"
+)
 
 # ------------------------------------------------------------------------------
-# BLOCO 2 - Montar cenarios candidatos
+# BLOCO 2 - Selecionar finalistas confirmados por modelo
 # ------------------------------------------------------------------------------
-configs_base <- tabela_benchmark %>%
-  dplyr::group_by(Modelo) %>%
-  dplyr::arrange(dplyr::desc(ROC), dplyr::desc(F1), dplyr::desc(GMean), .by_group = TRUE) %>%
-  dplyr::slice(1) %>%
-  dplyr::ungroup() %>%
+configs_base <- selecionar_melhor_cenario_por_modelo(tabela_benchmark) %>%
   dplyr::mutate(
     Usa_SMOTENC = FALSE,
+    Origem_Finalista = "Confirmacao_SemBalanceamento",
     Cenario = paste0(Modelo, "_", Subconjunto, "_SemBalanceamento")
   )
 
 if (!is.null(tabela_balanceamento)) {
   configs_smotenc <- tabela_balanceamento %>%
     dplyr::filter(Cenario == "Com_SMOTENC") %>%
-    dplyr::group_by(Modelo) %>%
-    dplyr::arrange(dplyr::desc(ROC), dplyr::desc(F1), dplyr::desc(GMean), .by_group = TRUE) %>%
-    dplyr::slice(1) %>%
-    dplyr::ungroup() %>%
+    selecionar_melhor_cenario_por_modelo() %>%
     dplyr::mutate(
       Usa_SMOTENC = TRUE,
+      Origem_Finalista = "Confirmacao_ComSMOTENC",
       Cenario = paste0(Modelo, "_", Subconjunto, "_ComSMOTENC")
     )
 } else {
   configs_smotenc <- tibble::tibble()
 }
 
-configs_candidatos <- dplyr::bind_rows(configs_base, configs_smotenc) %>%
-  dplyr::mutate(TopN = as.integer(gsub("^Top", "", Subconjunto))) %>%
-  dplyr::arrange(Modelo, Usa_SMOTENC)
+configs_finalistas <- dplyr::bind_rows(configs_base, configs_smotenc) %>%
+  selecionar_melhor_cenario_por_modelo() %>%
+  dplyr::arrange(Modelo)
 
-print(configs_candidatos)
+print(configs_finalistas)
 
 # ------------------------------------------------------------------------------
-# BLOCO 3 - Gerar predicoes OOF
+# BLOCO 3 - Gerar predicoes OOF nos finalistas
 # ------------------------------------------------------------------------------
-gerar_predicoes_oof <- function(config_modelo, treino_df) {
+gerar_predicoes_oof <- function(config_modelo, treino_df, folds_cv) {
   vars_modelo <- parse_variaveis(config_modelo$Variaveis[1])
   dados_sub <- treino_df[, c(vars_modelo, "Class"), drop = FALSE]
   formula_sub <- montar_formula(vars_modelo)
 
   if (config_modelo$Modelo[1] == "XGBoost") {
-    set.seed(SEED_PROJETO)
-    folds_xgb <- caret::createFolds(dados_sub$Class, k = CV_FOLDS_PADRAO, returnTrain = FALSE)
-
     resultado_xgb <- avaliar_xgb_oof(
       dados = dados_sub,
-      folds = folds_xgb,
+      folds = folds_cv,
       grid_xgb = obter_grid_modelo_config(config_modelo),
       aplicar_smotenc = isTRUE(config_modelo$Usa_SMOTENC[1]),
       formula_modelo = formula_sub
@@ -97,22 +94,28 @@ gerar_predicoes_oof <- function(config_modelo, treino_df) {
     dados_sub = dados_sub,
     tune_grid = obter_grid_modelo_config(config_modelo),
     usar_smotenc = isTRUE(config_modelo$Usa_SMOTENC[1]),
-    cv_repeats = 1,
-    save_predictions = TRUE
+    save_predictions = TRUE,
+    fase_validacao = "confirmacao",
+    folds_cv = folds_cv
   )
 
   extrair_predicoes_oof_caret(modelo_oof)
 }
 
 # ------------------------------------------------------------------------------
-# BLOCO 4 - Calibrar threshold por cenario
+# BLOCO 4 - Calibrar threshold por finalista
 # ------------------------------------------------------------------------------
 tabela_thresholds <- list()
 config_modelos <- list()
 
-for (i in seq_len(nrow(configs_candidatos))) {
-  config_atual <- configs_candidatos[i, , drop = FALSE]
-  pred_oof <- gerar_predicoes_oof(config_atual, treino_df = treino)
+for (i in seq_len(nrow(configs_finalistas))) {
+  config_atual <- configs_finalistas[i, , drop = FALSE]
+  pred_oof <- gerar_predicoes_oof(
+    config_modelo = config_atual,
+    treino_df = treino,
+    folds_cv = folds_confirmacao
+  )
+
   threshold_youden <- encontrar_threshold_youden(
     obs = pred_oof$obs,
     prob_deve = pred_oof$Deve
@@ -175,7 +178,7 @@ grafico_metricas_threshold <- ggplot2::ggplot(
   ggplot2::geom_col(position = "dodge") +
   ggplot2::facet_wrap(~ Cenario) +
   ggplot2::labs(
-    title = "Impacto do threshold padrao vs Youden",
+    title = "Impacto do threshold padrao vs Youden nos finalistas",
     subtitle = "Sensibilidade merece leitura prioritaria em credito",
     x = "Metrica",
     y = "Valor"
@@ -189,6 +192,9 @@ print(grafico_metricas_threshold)
 # ------------------------------------------------------------------------------
 saveRDS(tabela_thresholds, "objetos/tabela_thresholds_finais.rds")
 readr::write_csv(tabela_thresholds, "resultados/tabela_thresholds_finais.csv")
+
+saveRDS(configs_finalistas, "objetos/config_modelos_finalistas_confirmacao.rds")
+readr::write_csv(configs_finalistas, "resultados/config_modelos_finalistas_confirmacao.csv")
 
 saveRDS(config_modelos, "objetos/config_modelos_finais.rds")
 readr::write_csv(config_modelos, "resultados/config_modelos_finais.csv")

@@ -1,6 +1,7 @@
 # ==============================================================================
 # 06B_xgb_balanceamento_smotenc.R
-# Responsabilidade: comparar XGBoost sem balanceamento vs com SMOTENC.
+# Responsabilidade: fase de confirmacao para XGBoost, comparando sem
+# balanceamento versus com SMOTENC apenas no melhor subconjunto confirmado.
 # O passo step_smotenc() fica sempre com skip = TRUE.
 # ==============================================================================
 
@@ -8,71 +9,93 @@ source("00_setup.R")
 source("R/funcoes_modelos.R")
 
 # ------------------------------------------------------------------------------
-# BLOCO 1 - Carregar dados e ranking
+# BLOCO 1 - Carregar dados e finalista confirmado
 # ------------------------------------------------------------------------------
 treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
-ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+tabela_xgb_confirmada <- readRDS("objetos/tabela_xgboost_subconjuntos_sem_balanceamento.rds") %>%
+  dplyr::filter(Modelo == "XGBoost")
 
-ordem_variaveis <- ranking_variaveis$Variavel_Original
-subconjuntos <- obter_subconjuntos_fixos(ordem_variaveis, tamanhos = c(13, 14))
-grid_xgb <- grid_xgb_padrao()
+finalistas_xgb <- selecionar_finalistas_modelagem(
+  tabela = tabela_xgb_confirmada,
+  n_por_modelo = N_FINALISTAS_BALANCEAMENTO_POR_MODELO
+)
+
+folds_confirmacao <- criar_folds_estratificados(
+  y = treino$Class,
+  fase = "confirmacao"
+)
+grid_xgb_confirmacao <- obter_grid_modelo_fase(
+  modelo = "XGBoost",
+  dados_sub = treino[, c(setdiff(names(treino), "Class")[1], "Class"), drop = FALSE],
+  fase = "confirmacao"
+)
+
+print(finalistas_xgb)
 
 resultados <- list()
 contador <- 1
 
 # ------------------------------------------------------------------------------
-# BLOCO 2 - Loop por subconjunto
+# BLOCO 2 - Confirmacao do balanceamento no subconjunto finalista
 # ------------------------------------------------------------------------------
-for (nome_sub in names(subconjuntos)) {
-  vars_sub <- subconjuntos[[nome_sub]]
+for (i in seq_len(nrow(finalistas_xgb))) {
+  config_atual <- finalistas_xgb[i, , drop = FALSE]
+  vars_sub <- parse_variaveis(config_atual$Variaveis[1])
   dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
   formula_sub <- montar_formula(vars_sub)
 
-  set.seed(SEED_PROJETO)
-  folds_xgb <- caret::createFolds(dados_sub$Class, k = CV_FOLDS_PADRAO, returnTrain = FALSE)
-
   cat("\n====================================================\n")
-  cat("Subconjunto:", nome_sub, "\n")
+  cat("Confirmacao de balanceamento -", config_atual$Subconjunto[1], "\n")
   cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
   cat("====================================================\n")
 
   tabela_base <- avaliar_xgb_cv(
     dados = dados_sub,
-    folds = folds_xgb,
-    grid_xgb = grid_xgb,
+    folds = folds_confirmacao,
+    grid_xgb = grid_xgb_confirmacao,
     aplicar_smotenc = FALSE,
     formula_modelo = formula_sub
   )
 
-  resultados[[contador]] <- tabela_base %>%
-    dplyr::arrange(desc(ROC), desc(F1), desc(GMean)) %>%
-    dplyr::slice(1) %>%
-    dplyr::mutate(
-      Subconjunto = nome_sub,
+  resultados[[contador]] <- extrair_melhor_resultado_xgb(
+    tabela_base,
+    metadata = list(
+      Subconjunto = config_atual$Subconjunto[1],
+      TopN = config_atual$TopN[1],
       Modelo = "XGBoost",
       Cenario = "Sem_balanceamento",
-      Variaveis = paste(vars_sub, collapse = ", "),
+      Variaveis = config_atual$Variaveis[1],
       Usa_SMOTENC = FALSE
+    )
+  ) %>%
+    adicionar_contexto_validacao(
+      fase = "confirmacao",
+      folds_cv = folds_confirmacao
     )
   contador <- contador + 1
 
   tabela_smotenc <- avaliar_xgb_cv(
     dados = dados_sub,
-    folds = folds_xgb,
-    grid_xgb = grid_xgb,
+    folds = folds_confirmacao,
+    grid_xgb = grid_xgb_confirmacao,
     aplicar_smotenc = TRUE,
     formula_modelo = formula_sub
   )
 
-  resultados[[contador]] <- tabela_smotenc %>%
-    dplyr::arrange(desc(ROC), desc(F1), desc(GMean)) %>%
-    dplyr::slice(1) %>%
-    dplyr::mutate(
-      Subconjunto = nome_sub,
+  resultados[[contador]] <- extrair_melhor_resultado_xgb(
+    tabela_smotenc,
+    metadata = list(
+      Subconjunto = config_atual$Subconjunto[1],
+      TopN = config_atual$TopN[1],
       Modelo = "XGBoost",
       Cenario = "Com_SMOTENC",
-      Variaveis = paste(vars_sub, collapse = ", "),
+      Variaveis = config_atual$Variaveis[1],
       Usa_SMOTENC = TRUE
+    )
+  ) %>%
+    adicionar_contexto_validacao(
+      fase = "confirmacao",
+      folds_cv = folds_confirmacao
     )
   contador <- contador + 1
 }
@@ -82,7 +105,7 @@ for (nome_sub in names(subconjuntos)) {
 # ------------------------------------------------------------------------------
 tabela_xgb_balanceamento <- dplyr::bind_rows(resultados) %>%
   dplyr::select(
-    Subconjunto, Modelo, Cenario,
+    Subconjunto, TopN, Modelo, Cenario,
     ROC, Sens, Spec, Precision, F1, GMean,
     dplyr::everything()
   ) %>%
@@ -114,7 +137,7 @@ grafico_roc_balanceamento <- ggplot2::ggplot(
   ) +
   ggplot2::facet_wrap(~ Modelo) +
   ggplot2::labs(
-    title = "ROC: comparacao de balanceamento por modelo",
+    title = "ROC: confirmacao do balanceamento por modelo",
     x = "Subconjunto",
     y = "ROC"
   ) +
@@ -133,7 +156,7 @@ grafico_f1_balanceamento <- ggplot2::ggplot(
   ) +
   ggplot2::facet_wrap(~ Modelo) +
   ggplot2::labs(
-    title = "F1: comparacao de balanceamento por modelo",
+    title = "F1: confirmacao do balanceamento por modelo",
     x = "Subconjunto",
     y = "F1"
   ) +

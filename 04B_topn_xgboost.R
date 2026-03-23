@@ -1,6 +1,6 @@
 # ==============================================================================
 # 04B_topn_xgboost.R
-# Responsabilidade: curva Top-N para XGBoost.
+# Responsabilidade: curva Top-N exploratoria para XGBoost.
 # ==============================================================================
 
 source("00_setup.R")
@@ -16,8 +16,15 @@ ordem_variaveis <- ranking_variaveis$Variavel_Original
 n_total_variaveis <- length(ordem_variaveis)
 
 set.seed(SEED_PROJETO)
-folds_cv <- caret::createFolds(treino$Class, k = CV_FOLDS_PADRAO, returnTrain = FALSE)
-grid_xgb <- grid_xgb_padrao()
+folds_cv <- criar_folds_estratificados(
+  y = treino$Class,
+  fase = "exploratorio"
+)
+grid_xgb <- obter_grid_modelo_fase(
+  modelo = "XGBoost",
+  dados_sub = treino[, c(ordem_variaveis[1], "Class"), drop = FALSE],
+  fase = "exploratorio"
+)
 resultados_topn <- vector("list", n_total_variaveis)
 
 # ------------------------------------------------------------------------------
@@ -41,14 +48,18 @@ for (k in seq_along(ordem_variaveis)) {
     formula_modelo = formula_k
   )
 
-  resultados_topn[[k]] <- tabela_xgb_k %>%
-    dplyr::arrange(desc(ROC), desc(F1), desc(GMean)) %>%
-    dplyr::slice(1) %>%
-    dplyr::mutate(
+  resultados_topn[[k]] <- extrair_melhor_resultado_xgb(
+    tabela_xgb_k,
+    metadata = list(
       TopN = k,
       Modelo = "XGBoost",
       Variaveis = paste(vars_k, collapse = ", "),
       Usa_SMOTENC = FALSE
+    )
+  ) %>%
+    adicionar_contexto_validacao(
+      fase = "exploratorio",
+      folds_cv = folds_cv
     ) %>%
     dplyr::select(
       TopN, Modelo,

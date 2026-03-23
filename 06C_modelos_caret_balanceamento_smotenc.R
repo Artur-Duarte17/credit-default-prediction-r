@@ -1,82 +1,110 @@
 # ==============================================================================
 # 06C_modelos_caret_balanceamento_smotenc.R
-# Responsabilidade: comparar SVM radial, NNET e avNNet com e sem SMOTENC.
-# O passo step_smotenc() fica sempre com skip = TRUE.
+# Responsabilidade: fase de confirmacao para SVM radial, NNET e avNNet,
+# comparando sem balanceamento versus com SMOTENC apenas nos subconjuntos
+# finalistas de cada modelo. O passo step_smotenc() fica sempre com skip = TRUE.
 # ==============================================================================
 
 source("00_setup.R")
 source("R/funcoes_modelos.R")
 
 # ------------------------------------------------------------------------------
-# BLOCO 1 - Carregar dados e ranking
+# BLOCO 1 - Carregar dados e finalistas confirmados
 # ------------------------------------------------------------------------------
 treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
-ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
-
-ordem_variaveis <- ranking_variaveis$Variavel_Original
-subconjuntos <- obter_subconjuntos_fixos(ordem_variaveis, tamanhos = c(13, 14))
 modelos_balancear <- c("SVM_Radial", "NNET", "avNNet")
+
+tabela_sem_balanceamento <- dplyr::bind_rows(
+  readRDS("objetos/tabela_svm_subconjuntos_sem_balanceamento.rds"),
+  readRDS("objetos/tabela_redes_neurais_subconjuntos_sem_balanceamento.rds")
+) %>%
+  dplyr::filter(Modelo %in% modelos_balancear)
+
+finalistas_modelos <- selecionar_finalistas_modelagem(
+  tabela = tabela_sem_balanceamento,
+  n_por_modelo = N_FINALISTAS_BALANCEAMENTO_POR_MODELO
+)
+
+folds_confirmacao <- criar_folds_estratificados(
+  y = treino$Class,
+  fase = "confirmacao"
+)
+
+print(finalistas_modelos)
 
 resultados <- list()
 contador <- 1
 
 # ------------------------------------------------------------------------------
-# BLOCO 2 - Loop por subconjunto e modelo
+# BLOCO 2 - Confirmacao do balanceamento nos finalistas
 # ------------------------------------------------------------------------------
-for (nome_sub in names(subconjuntos)) {
-  vars_sub <- subconjuntos[[nome_sub]]
+for (i in seq_len(nrow(finalistas_modelos))) {
+  config_atual <- finalistas_modelos[i, , drop = FALSE]
+  vars_sub <- parse_variaveis(config_atual$Variaveis[1])
   dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
   formula_sub <- montar_formula(vars_sub)
 
   cat("\n====================================================\n")
-  cat("Subconjunto:", nome_sub, "\n")
+  cat("Confirmacao de balanceamento -", config_atual$Modelo[1], "-", config_atual$Subconjunto[1], "\n")
   cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
   cat("====================================================\n")
 
-  for (modelo_atual in modelos_balancear) {
-    modelo_base <- treinar_modelo_caret(
-      modelo = modelo_atual,
-      formula_modelo = formula_sub,
-      dados_sub = dados_sub,
-      usar_smotenc = FALSE
-    )
+  modelo_base <- treinar_modelo_caret(
+    modelo = config_atual$Modelo[1],
+    formula_modelo = formula_sub,
+    dados_sub = dados_sub,
+    usar_smotenc = FALSE,
+    fase_validacao = "confirmacao",
+    folds_cv = folds_confirmacao
+  )
 
-    resultados[[contador]] <- extrair_melhor_resultado_caret(
-      modelo_base,
-      metadata = list(
-        Subconjunto = nome_sub,
-        Modelo = modelo_atual,
-        Cenario = "Sem_balanceamento",
-        Variaveis = paste(vars_sub, collapse = ", "),
-        Usa_SMOTENC = FALSE
-      )
+  resultados[[contador]] <- extrair_melhor_resultado_caret(
+    modelo_base,
+    metadata = list(
+      Subconjunto = config_atual$Subconjunto[1],
+      TopN = config_atual$TopN[1],
+      Modelo = config_atual$Modelo[1],
+      Cenario = "Sem_balanceamento",
+      Variaveis = config_atual$Variaveis[1],
+      Usa_SMOTENC = FALSE
     )
-    contador <- contador + 1
+  ) %>%
+    adicionar_contexto_validacao(
+      fase = "confirmacao",
+      folds_cv = folds_confirmacao
+    )
+  contador <- contador + 1
 
-    modelo_smotenc <- treinar_modelo_caret(
-      modelo = modelo_atual,
-      formula_modelo = formula_sub,
-      dados_sub = dados_sub,
-      usar_smotenc = TRUE
-    )
+  modelo_smotenc <- treinar_modelo_caret(
+    modelo = config_atual$Modelo[1],
+    formula_modelo = formula_sub,
+    dados_sub = dados_sub,
+    usar_smotenc = TRUE,
+    fase_validacao = "confirmacao",
+    folds_cv = folds_confirmacao
+  )
 
-    resultados[[contador]] <- extrair_melhor_resultado_caret(
-      modelo_smotenc,
-      metadata = list(
-        Subconjunto = nome_sub,
-        Modelo = modelo_atual,
-        Cenario = "Com_SMOTENC",
-        Variaveis = paste(vars_sub, collapse = ", "),
-        Usa_SMOTENC = TRUE
-      )
+  resultados[[contador]] <- extrair_melhor_resultado_caret(
+    modelo_smotenc,
+    metadata = list(
+      Subconjunto = config_atual$Subconjunto[1],
+      TopN = config_atual$TopN[1],
+      Modelo = config_atual$Modelo[1],
+      Cenario = "Com_SMOTENC",
+      Variaveis = config_atual$Variaveis[1],
+      Usa_SMOTENC = TRUE
     )
-    contador <- contador + 1
-  }
+  ) %>%
+    adicionar_contexto_validacao(
+      fase = "confirmacao",
+      folds_cv = folds_confirmacao
+    )
+  contador <- contador + 1
 }
 
 tabela_balanceamento <- dplyr::bind_rows(resultados) %>%
   dplyr::select(
-    Subconjunto, Modelo, Cenario,
+    Subconjunto, TopN, Modelo, Cenario,
     ROC, Sens, Spec, Precision, F1, GMean,
     dplyr::everything()
   ) %>%
@@ -92,7 +120,7 @@ grafico_roc_balanceamento <- ggplot2::ggplot(
   ggplot2::geom_point(size = 3) +
   ggplot2::facet_wrap(~ Modelo) +
   ggplot2::labs(
-    title = "ROC: SMOTENC nos modelos caret adicionais",
+    title = "ROC: confirmacao do SMOTENC nos modelos caret adicionais",
     x = "Subconjunto",
     y = "ROC"
   ) +
@@ -106,7 +134,7 @@ grafico_f1_balanceamento <- ggplot2::ggplot(
   ggplot2::geom_point(size = 3) +
   ggplot2::facet_wrap(~ Modelo) +
   ggplot2::labs(
-    title = "F1: SMOTENC nos modelos caret adicionais",
+    title = "F1: confirmacao do SMOTENC nos modelos caret adicionais",
     x = "Subconjunto",
     y = "F1"
   ) +

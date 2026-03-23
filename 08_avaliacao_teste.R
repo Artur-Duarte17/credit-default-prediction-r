@@ -1,6 +1,6 @@
 # ==============================================================================
 # 08_avaliacao_teste.R
-# Responsabilidade: avaliar no teste todos os cenarios calibrados.
+# Responsabilidade: avaliar no teste apenas os cenarios finalistas calibrados.
 # Nota metodologica:
 # Sensibilidade mede a capacidade de encontrar inadimplentes reais.
 # Especificidade mede a capacidade de preservar bons pagadores.
@@ -12,7 +12,7 @@ source("00_setup.R")
 source("R/funcoes_modelos.R")
 
 # ------------------------------------------------------------------------------
-# BLOCO 1 - Carregar dados e configuracoes
+# BLOCO 1 - Carregar dados e configuracoes finais
 # ------------------------------------------------------------------------------
 treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
 teste <- garantir_ordem_classe(readRDS("objetos/teste.rds"))
@@ -30,7 +30,7 @@ for (i in seq_len(nrow(config_modelos))) {
   config_atual <- config_modelos[i, , drop = FALSE]
 
   cat("\n====================================================\n")
-  cat("Treinando cenario:", config_atual$Cenario[1], "\n")
+  cat("Treinando cenario finalista:", config_atual$Cenario[1], "\n")
   cat("Modelo:", config_atual$Modelo[1], "\n")
   cat("====================================================\n")
 
@@ -51,7 +51,9 @@ for (i in seq_len(nrow(config_modelos))) {
       Modelo = config_atual$Modelo[1],
       Subconjunto = config_atual$Subconjunto[1],
       Usa_SMOTENC = config_atual$Usa_SMOTENC[1],
-      TopN = config_atual$TopN[1]
+      TopN = config_atual$TopN[1],
+      Origem_Finalista = config_atual$Origem_Finalista[1],
+      Fase_Protocolo = config_atual$Fase_Protocolo[1]
     )
 
   resultados_teste[[i]] <- metricas_teste

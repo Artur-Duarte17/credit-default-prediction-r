@@ -192,10 +192,10 @@ adicionar_metricas_negocio <- function(
 
 criar_tabela_shap_vs_enet <- function(tabela_shap, ranking_enet) {
   tabela_shap %>%
-    dplyr::rename(
-      Variavel = Variavel,
+    dplyr::select(
+      Variavel,
       Posicao_SHAP = Posicao,
-      Importancia_SHAP = Importancia_SHAP
+      Importancia_SHAP
     ) %>%
     dplyr::full_join(
       ranking_enet %>%

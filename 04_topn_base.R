@@ -1,6 +1,6 @@
 # ==============================================================================
 # 04_topn_base.R
-# Responsabilidade: curva Top-N para GLM com CV repetida.
+# Responsabilidade: curva Top-N exploratoria para GLM.
 # ==============================================================================
 
 source("00_setup.R")
@@ -14,6 +14,10 @@ ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
 
 ordem_variaveis <- ranking_variaveis$Variavel_Original
 resultados_topn <- vector("list", length(ordem_variaveis))
+folds_exploratorios <- criar_folds_estratificados(
+  y = treino$Class,
+  fase = "exploratorio"
+)
 
 # ------------------------------------------------------------------------------
 # BLOCO 2 - Loop Top-1 ate Top-N
@@ -31,7 +35,9 @@ for (k in seq_along(ordem_variaveis)) {
   modelo_glm_k <- treinar_modelo_caret(
     modelo = "GLM",
     formula_modelo = formula_k,
-    dados_sub = dados_k
+    dados_sub = dados_k,
+    fase_validacao = "exploratorio",
+    folds_cv = folds_exploratorios
   )
 
   resultados_topn[[k]] <- extrair_melhor_resultado_caret(
@@ -43,6 +49,10 @@ for (k in seq_along(ordem_variaveis)) {
       Usa_SMOTENC = FALSE
     )
   ) %>%
+    adicionar_contexto_validacao(
+      fase = "exploratorio",
+      folds_cv = folds_exploratorios
+    ) %>%
     dplyr::select(
       TopN, Modelo,
       ROC, Sens, Spec, Precision, F1, GMean,
@@ -126,6 +136,7 @@ print(grafico_roc_topn)
 # BLOCO 5 - Salvar resultados
 # ------------------------------------------------------------------------------
 saveRDS(curva_topn, "objetos/curva_topn_glm.rds")
+saveRDS(melhor_topn, "objetos/melhor_topn_glm.rds")
 readr::write_csv(curva_topn, "resultados/curva_topn_glm.csv")
 readr::write_csv(top10_topn, "resultados/top10_topn_glm.csv")
 

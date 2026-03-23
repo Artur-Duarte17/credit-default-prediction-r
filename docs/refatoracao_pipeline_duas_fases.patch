@@ -1,0 +1,2803 @@
+diff --git a/00_setup.R b/00_setup.R
+index 3e81006..0b9ed3e 100644
+--- a/00_setup.R
++++ b/00_setup.R
+@@ -52,8 +52,24 @@ for (pasta in PASTAS_PROJETO) {
+ SEED_PROJETO <- 123
+ SPLITS_TREINO_DISPONIVEIS <- c(0.70, 0.80)
+ SPLIT_TREINO_PADRAO <- 0.70
+-CV_FOLDS_PADRAO <- 5
+-CV_REPEATS_PADRAO <- 2
++CV_FOLDS_EXPLORATORIO <- 5
++CV_REPEATS_EXPLORATORIO <- 1
++CV_FOLDS_CONFIRMACAO <- 5
++CV_REPEATS_CONFIRMACAO <- 2
++CV_FOLDS_PADRAO <- CV_FOLDS_CONFIRMACAO
++CV_REPEATS_PADRAO <- CV_REPEATS_CONFIRMACAO
++
++TOPN_VIZINHANCA_CANDIDATA <- 2
++TOPN_CANDIDATOS_FALLBACK <- c(10, 13, 14)
++RODAR_TOPN_COMPLETO_MODELOS_CARET <- FALSE
++N_FINALISTAS_CONFIRMACAO_SEM_BALANCEAMENTO <- 2
++N_FINALISTAS_BALANCEAMENTO_POR_MODELO <- 1
++
++SVM_C_EXPLORATORIO <- c(0.5, 1, 2)
++NNET_SIZE_EXPLORATORIO <- c(3, 5)
++NNET_DECAY_EXPLORATORIO <- c(0.001, 0.01)
++AVNNET_SIZE_EXPLORATORIO <- NNET_SIZE_EXPLORATORIO
++AVNNET_DECAY_EXPLORATORIO <- NNET_DECAY_EXPLORATORIO
+ SMOTENC_OVER_RATIO <- 1
+ SMOTENC_NEIGHBORS <- 5
+ CUSTO_FALSO_NEGATIVO <- 5000
+diff --git a/04B_topn_xgboost.R b/04B_topn_xgboost.R
+index 1ee5fe0..1eaa700 100644
+--- a/04B_topn_xgboost.R
++++ b/04B_topn_xgboost.R
+@@ -1,6 +1,6 @@
+ # ==============================================================================
+ # 04B_topn_xgboost.R
+-# Responsabilidade: curva Top-N para XGBoost.
++# Responsabilidade: curva Top-N exploratoria para XGBoost.
+ # ==============================================================================
+ 
+ source("00_setup.R")
+@@ -16,8 +16,15 @@ ordem_variaveis <- ranking_variaveis$Variavel_Original
+ n_total_variaveis <- length(ordem_variaveis)
+ 
+ set.seed(SEED_PROJETO)
+-folds_cv <- caret::createFolds(treino$Class, k = CV_FOLDS_PADRAO, returnTrain = FALSE)
+-grid_xgb <- grid_xgb_padrao()
++folds_cv <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "exploratorio"
++)
++grid_xgb <- obter_grid_modelo_fase(
++  modelo = "XGBoost",
++  dados_sub = treino[, c(ordem_variaveis[1], "Class"), drop = FALSE],
++  fase = "exploratorio"
++)
+ resultados_topn <- vector("list", n_total_variaveis)
+ 
+ # ------------------------------------------------------------------------------
+@@ -41,14 +48,18 @@ for (k in seq_along(ordem_variaveis)) {
+     formula_modelo = formula_k
+   )
+ 
+-  resultados_topn[[k]] <- tabela_xgb_k %>%
+-    dplyr::arrange(desc(ROC), desc(F1), desc(GMean)) %>%
+-    dplyr::slice(1) %>%
+-    dplyr::mutate(
++  resultados_topn[[k]] <- extrair_melhor_resultado_xgb(
++    tabela_xgb_k,
++    metadata = list(
+       TopN = k,
+       Modelo = "XGBoost",
+       Variaveis = paste(vars_k, collapse = ", "),
+       Usa_SMOTENC = FALSE
++    )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "exploratorio",
++      folds_cv = folds_cv
+     ) %>%
+     dplyr::select(
+       TopN, Modelo,
+diff --git a/04C_topn_modelos_caret.R b/04C_topn_modelos_caret.R
+index 967fb3a..d252fb9 100644
+--- a/04C_topn_modelos_caret.R
++++ b/04C_topn_modelos_caret.R
+@@ -1,6 +1,7 @@
+ # ==============================================================================
+ # 04C_topn_modelos_caret.R
+-# Responsabilidade: curvas Top-N para RF, SVM radial, NNET e avNNet.
++# Responsabilidade: curvas Top-N exploratorias para RF, SVM radial, NNET e avNNet.
++# Por padrao, esta etapa usa apenas TopN candidatos guiados por GLM e XGBoost.
+ # ==============================================================================
+ 
+ source("00_setup.R")
+@@ -15,40 +16,72 @@ ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+ ordem_variaveis <- ranking_variaveis$Variavel_Original
+ modelos_topn <- c("RF", "SVM_Radial", "NNET", "avNNet")
+ 
++if (isTRUE(RODAR_TOPN_COMPLETO_MODELOS_CARET)) {
++  topn_utilizados <- tibble::tibble(
++    TopN = seq_along(ordem_variaveis),
++    Origem = "Override_TopN_Completo",
++    MelhorTopN_GLM = NA_integer_,
++    MelhorTopN_XGBoost = NA_integer_
++  )
++} else {
++  topn_utilizados <- obter_topn_candidatos(ordem_variaveis = ordem_variaveis)
++}
++
++subconjuntos_candidatos <- obter_subconjuntos_candidatos(
++  ordem_variaveis = ordem_variaveis,
++  topn_candidatos = topn_utilizados$TopN
++)
++
++folds_exploratorios <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "exploratorio"
++)
++
++print(topn_utilizados)
++
+ # ------------------------------------------------------------------------------
+-# BLOCO 2 - Rodar curvas Top-N
++# BLOCO 2 - Rodar curvas Top-N candidatas
+ # ------------------------------------------------------------------------------
+ resultados_modelos <- vector("list", length(modelos_topn))
+ names(resultados_modelos) <- modelos_topn
+ 
+ for (modelo_atual in modelos_topn) {
+-  resultados_topn <- vector("list", length(ordem_variaveis))
++  resultados_topn <- vector("list", length(subconjuntos_candidatos))
+ 
+-  for (k in seq_along(ordem_variaveis)) {
+-    vars_k <- ordem_variaveis[seq_len(k)]
++  for (idx_sub in seq_along(subconjuntos_candidatos)) {
++    nome_sub <- names(subconjuntos_candidatos)[idx_sub]
++    vars_k <- subconjuntos_candidatos[[idx_sub]]
++    topn_k <- as.integer(gsub("^Top", "", nome_sub))
+     dados_k <- treino[, c(vars_k, "Class"), drop = FALSE]
+     formula_k <- montar_formula(vars_k)
+ 
+     cat("\n=============================\n")
+-    cat("Modelo:", modelo_atual, "- Top-", k, "\n")
++    cat("Modelo:", modelo_atual, "-", nome_sub, "\n")
+     cat("Variaveis:", paste(vars_k, collapse = ", "), "\n")
+     cat("=============================\n")
+ 
+     modelo_ajustado <- treinar_modelo_caret(
+       modelo = modelo_atual,
+       formula_modelo = formula_k,
+-      dados_sub = dados_k
++      dados_sub = dados_k,
++      fase_validacao = "exploratorio",
++      folds_cv = folds_exploratorios
+     )
+ 
+-    resultados_topn[[k]] <- extrair_melhor_resultado_caret(
++    resultados_topn[[idx_sub]] <- extrair_melhor_resultado_caret(
+       modelo_ajustado,
+       metadata = list(
+-        TopN = k,
++        TopN = topn_k,
+         Modelo = modelo_atual,
+         Variaveis = paste(vars_k, collapse = ", "),
+         Usa_SMOTENC = FALSE
+       )
+     ) %>%
++      adicionar_contexto_validacao(
++        fase = "exploratorio",
++        folds_cv = folds_exploratorios
++      ) %>%
++      dplyr::left_join(topn_utilizados, by = "TopN") %>%
+       dplyr::select(
+         TopN, Modelo,
+         ROC, Sens, Spec, Precision, F1, GMean,
+@@ -64,8 +97,7 @@ curva_topn_modelos <- dplyr::bind_rows(resultados_modelos) %>%
+ 
+ top10_topn_modelos <- curva_topn_modelos %>%
+   dplyr::group_by(Modelo) %>%
+-  dplyr::slice_max(order_by = ROC, n = 10, with_ties = FALSE) %>%
+-  dplyr::arrange(Modelo, dplyr::desc(ROC)) %>%
++  dplyr::group_modify(~ ordenar_resultados_modelagem(.x) %>% dplyr::slice_head(n = min(10, nrow(.x)))) %>%
+   dplyr::ungroup()
+ 
+ print(top10_topn_modelos)
+@@ -80,8 +112,8 @@ grafico_curvas_topn <- ggplot2::ggplot(
+   ggplot2::geom_line(linewidth = 1) +
+   ggplot2::geom_point(size = 1.7) +
+   ggplot2::labs(
+-    title = "Curvas Top-N por modelo",
+-    subtitle = "RF, SVM radial e redes neurais",
++    title = "Curvas Top-N candidatas por modelo",
++    subtitle = "RF, SVM radial e redes com reducao guiada por GLM e XGBoost",
+     x = "Quantidade de variaveis",
+     y = "ROC"
+   ) +
+@@ -97,7 +129,7 @@ grafico_top10_modelos <- ggplot2::ggplot(
+ ) +
+   ggplot2::geom_col() +
+   ggplot2::labs(
+-    title = "Top 10 subconjuntos por modelo",
++    title = "Top subconjuntos por modelo",
+     x = "ROC",
+     y = NULL
+   ) +
+@@ -110,8 +142,11 @@ print(grafico_top10_modelos)
+ # BLOCO 4 - Salvar resultados
+ # ------------------------------------------------------------------------------
+ saveRDS(curva_topn_modelos, "objetos/curva_topn_modelos_caret.rds")
++saveRDS(topn_utilizados, "objetos/topn_candidatos_modelos_caret.rds")
++
+ readr::write_csv(curva_topn_modelos, "resultados/curva_topn_modelos_caret.csv")
+ readr::write_csv(top10_topn_modelos, "resultados/top10_topn_modelos_caret.csv")
++readr::write_csv(topn_utilizados, "resultados/topn_candidatos_modelos_caret.csv")
+ 
+ ggplot2::ggsave(
+   filename = "figuras/curva_roc_topn_modelos_caret.png",
+diff --git a/04_topn_base.R b/04_topn_base.R
+index f5346f9..648916b 100644
+--- a/04_topn_base.R
++++ b/04_topn_base.R
+@@ -1,6 +1,6 @@
+ # ==============================================================================
+ # 04_topn_base.R
+-# Responsabilidade: curva Top-N para GLM com CV repetida.
++# Responsabilidade: curva Top-N exploratoria para GLM.
+ # ==============================================================================
+ 
+ source("00_setup.R")
+@@ -14,6 +14,10 @@ ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+ 
+ ordem_variaveis <- ranking_variaveis$Variavel_Original
+ resultados_topn <- vector("list", length(ordem_variaveis))
++folds_exploratorios <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "exploratorio"
++)
+ 
+ # ------------------------------------------------------------------------------
+ # BLOCO 2 - Loop Top-1 ate Top-N
+@@ -31,7 +35,9 @@ for (k in seq_along(ordem_variaveis)) {
+   modelo_glm_k <- treinar_modelo_caret(
+     modelo = "GLM",
+     formula_modelo = formula_k,
+-    dados_sub = dados_k
++    dados_sub = dados_k,
++    fase_validacao = "exploratorio",
++    folds_cv = folds_exploratorios
+   )
+ 
+   resultados_topn[[k]] <- extrair_melhor_resultado_caret(
+@@ -43,6 +49,10 @@ for (k in seq_along(ordem_variaveis)) {
+       Usa_SMOTENC = FALSE
+     )
+   ) %>%
++    adicionar_contexto_validacao(
++      fase = "exploratorio",
++      folds_cv = folds_exploratorios
++    ) %>%
+     dplyr::select(
+       TopN, Modelo,
+       ROC, Sens, Spec, Precision, F1, GMean,
+@@ -126,6 +136,7 @@ print(grafico_roc_topn)
+ # BLOCO 5 - Salvar resultados
+ # ------------------------------------------------------------------------------
+ saveRDS(curva_topn, "objetos/curva_topn_glm.rds")
++saveRDS(melhor_topn, "objetos/melhor_topn_glm.rds")
+ readr::write_csv(curva_topn, "resultados/curva_topn_glm.csv")
+ readr::write_csv(top10_topn, "resultados/top10_topn_glm.csv")
+ 
+diff --git a/05A_glm_rf_subconjuntos.R b/05A_glm_rf_subconjuntos.R
+index 8321fa3..d27f5c9 100644
+--- a/05A_glm_rf_subconjuntos.R
++++ b/05A_glm_rf_subconjuntos.R
+@@ -1,90 +1,178 @@
+ # ==============================================================================
+ # 05A_glm_rf_subconjuntos.R
+-# Responsabilidade: benchmark de GLM e RF nos subconjuntos Top-10/13/14.
++# Responsabilidade:
++# 1) fase exploratoria barata para GLM e RF em subconjuntos candidatos;
++# 2) fase de confirmacao apenas nos finalistas sem balanceamento.
+ # ==============================================================================
+ 
+ source("00_setup.R")
+ source("R/funcoes_modelos.R")
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 1 - Carregar dados e ranking
++# BLOCO 1 - Carregar dados e definir subconjuntos candidatos
+ # ------------------------------------------------------------------------------
+ treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
+ ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+ 
+ ordem_variaveis <- ranking_variaveis$Variavel_Original
+-subconjuntos <- obter_subconjuntos_fixos(ordem_variaveis)
++topn_candidatos <- obter_topn_candidatos(ordem_variaveis = ordem_variaveis)
++subconjuntos <- obter_subconjuntos_candidatos(
++  ordem_variaveis = ordem_variaveis,
++  topn_candidatos = topn_candidatos$TopN
++)
++
++folds_exploratorios <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "exploratorio"
++)
++folds_confirmacao <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "confirmacao"
++)
+ 
+-print(subconjuntos)
++print(topn_candidatos)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 2 - Treinar GLM e RF
++# BLOCO 2 - Benchmark exploratorio sem balanceamento
+ # ------------------------------------------------------------------------------
+-resultados_modelos <- list()
++resultados_exploratorios <- list()
+ contador <- 1
+ 
+ for (nome_sub in names(subconjuntos)) {
+   vars_sub <- subconjuntos[[nome_sub]]
++  topn_sub <- as.integer(gsub("^Top", "", nome_sub))
+   dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
+   formula_sub <- montar_formula(vars_sub)
+ 
+   cat("\n====================================================\n")
+-  cat("Subconjunto:", nome_sub, "\n")
++  cat("Fase exploratoria - Subconjunto:", nome_sub, "\n")
+   cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
+   cat("====================================================\n")
+ 
+   modelo_glm <- treinar_modelo_caret(
+     modelo = "GLM",
+     formula_modelo = formula_sub,
+-    dados_sub = dados_sub
++    dados_sub = dados_sub,
++    fase_validacao = "exploratorio",
++    folds_cv = folds_exploratorios
+   )
+ 
+-  resultados_modelos[[contador]] <- extrair_melhor_resultado_caret(
++  resultados_exploratorios[[contador]] <- extrair_melhor_resultado_caret(
+     modelo_glm,
+     metadata = list(
+       Subconjunto = nome_sub,
++      TopN = topn_sub,
+       Modelo = "GLM",
+       Variaveis = paste(vars_sub, collapse = ", "),
+       Base_Treino = "TreinoCompleto",
+       Usa_SMOTENC = FALSE
+     )
+-  )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "exploratorio",
++      folds_cv = folds_exploratorios
++    )
+   contador <- contador + 1
+ 
+   modelo_rf <- treinar_modelo_caret(
+     modelo = "RF",
+     formula_modelo = formula_sub,
+-    dados_sub = dados_sub
++    dados_sub = dados_sub,
++    fase_validacao = "exploratorio",
++    folds_cv = folds_exploratorios
+   )
+ 
+-  resultados_modelos[[contador]] <- extrair_melhor_resultado_caret(
++  resultados_exploratorios[[contador]] <- extrair_melhor_resultado_caret(
+     modelo_rf,
+     metadata = list(
+       Subconjunto = nome_sub,
++      TopN = topn_sub,
+       Modelo = "RF",
+       Variaveis = paste(vars_sub, collapse = ", "),
+       Base_Treino = "TreinoCompleto",
+       Usa_SMOTENC = FALSE
+     )
+-  )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "exploratorio",
++      folds_cv = folds_exploratorios
++    )
+   contador <- contador + 1
+ }
+ 
++tabela_exploratoria <- dplyr::bind_rows(resultados_exploratorios) %>%
++  dplyr::left_join(topn_candidatos, by = "TopN") %>%
++  dplyr::select(
++    Subconjunto, TopN, Modelo,
++    ROC, Sens, Spec, Precision, F1, GMean,
++    dplyr::everything()
++  ) %>%
++  dplyr::arrange(Modelo, TopN)
++
++finalistas_confirmacao <- selecionar_finalistas_modelagem(
++  tabela = tabela_exploratoria,
++  n_por_modelo = N_FINALISTAS_CONFIRMACAO_SEM_BALANCEAMENTO
++)
++
++print(finalistas_confirmacao)
++
+ # ------------------------------------------------------------------------------
+-# BLOCO 3 - Consolidar resultados
++# BLOCO 3 - Confirmacao sem balanceamento apenas nos finalistas
+ # ------------------------------------------------------------------------------
+-tabela_benchmark <- dplyr::bind_rows(resultados_modelos) %>%
++resultados_confirmacao <- list()
++
++for (i in seq_len(nrow(finalistas_confirmacao))) {
++  config_atual <- finalistas_confirmacao[i, , drop = FALSE]
++  vars_sub <- parse_variaveis(config_atual$Variaveis[1])
++  dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
++  formula_sub <- montar_formula(vars_sub)
++
++  cat("\n====================================================\n")
++  cat("Fase de confirmacao -", config_atual$Modelo[1], "-", config_atual$Subconjunto[1], "\n")
++  cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
++  cat("====================================================\n")
++
++  modelo_confirmado <- treinar_modelo_caret(
++    modelo = config_atual$Modelo[1],
++    formula_modelo = formula_sub,
++    dados_sub = dados_sub,
++    fase_validacao = "confirmacao",
++    folds_cv = folds_confirmacao
++  )
++
++  resultados_confirmacao[[i]] <- extrair_melhor_resultado_caret(
++    modelo_confirmado,
++    metadata = list(
++      Subconjunto = config_atual$Subconjunto[1],
++      TopN = config_atual$TopN[1],
++      Modelo = config_atual$Modelo[1],
++      Variaveis = config_atual$Variaveis[1],
++      Base_Treino = "TreinoCompleto",
++      Usa_SMOTENC = FALSE
++    )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "confirmacao",
++      folds_cv = folds_confirmacao
++    ) %>%
++    dplyr::left_join(topn_candidatos, by = "TopN")
++}
++
++# ------------------------------------------------------------------------------
++# BLOCO 4 - Consolidar resultados confirmados
++# ------------------------------------------------------------------------------
++tabela_benchmark <- dplyr::bind_rows(resultados_confirmacao) %>%
+   dplyr::select(
+-    Subconjunto, Modelo,
++    Subconjunto, TopN, Modelo,
+     ROC, Sens, Spec, Precision, F1, GMean,
+     dplyr::everything()
+   ) %>%
+-  dplyr::arrange(desc(ROC), desc(F1), desc(GMean))
++  ordenar_resultados_modelagem()
+ 
+ print(tabela_benchmark)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 4 - Graficos
++# BLOCO 5 - Graficos
+ # ------------------------------------------------------------------------------
+ grafico_roc_modelos <- ggplot2::ggplot(
+   tabela_benchmark,
+@@ -98,7 +186,7 @@ grafico_roc_modelos <- ggplot2::ggplot(
+     size = 3
+   ) +
+   ggplot2::labs(
+-    title = "ROC por modelo e subconjunto",
++    title = "ROC confirmado por modelo e subconjunto",
+     x = "Subconjunto",
+     y = "ROC"
+   ) +
+@@ -116,7 +204,7 @@ grafico_f1_modelos <- ggplot2::ggplot(
+     size = 3
+   ) +
+   ggplot2::labs(
+-    title = "F1 por modelo e subconjunto",
++    title = "F1 confirmado por modelo e subconjunto",
+     x = "Subconjunto",
+     y = "F1"
+   ) +
+@@ -126,8 +214,17 @@ print(grafico_roc_modelos)
+ print(grafico_f1_modelos)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 5 - Salvar resultados
++# BLOCO 6 - Salvar resultados
+ # ------------------------------------------------------------------------------
++saveRDS(
++  tabela_exploratoria,
++  "objetos/tabela_benchmark_glm_rf_sem_balanceamento_exploratorio.rds"
++)
++readr::write_csv(
++  tabela_exploratoria,
++  "resultados/tabela_benchmark_glm_rf_sem_balanceamento_exploratorio.csv"
++)
++
+ saveRDS(tabela_benchmark, "objetos/tabela_benchmark_glm_rf_sem_balanceamento.rds")
+ readr::write_csv(tabela_benchmark, "resultados/tabela_benchmark_glm_rf_sem_balanceamento.csv")
+ 
+diff --git a/05B_xgboost_subconjuntos.R b/05B_xgboost_subconjuntos.R
+index e4c1e07..d826e51 100644
+--- a/05B_xgboost_subconjuntos.R
++++ b/05B_xgboost_subconjuntos.R
+@@ -1,86 +1,179 @@
+ # ==============================================================================
+ # 05B_xgboost_subconjuntos.R
+-# Responsabilidade: benchmark de XGBoost nos subconjuntos Top-10/13/14.
++# Responsabilidade:
++# 1) fase exploratoria barata para XGBoost em subconjuntos candidatos;
++# 2) fase de confirmacao apenas nos finalistas sem balanceamento.
+ # ==============================================================================
+ 
+ source("00_setup.R")
+ source("R/funcoes_modelos.R")
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 1 - Carregar dados e ranking
++# BLOCO 1 - Carregar dados e definir subconjuntos candidatos
+ # ------------------------------------------------------------------------------
+ treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
+ ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+ 
+ ordem_variaveis <- ranking_variaveis$Variavel_Original
+-subconjuntos <- obter_subconjuntos_fixos(ordem_variaveis)
+-grid_xgb <- grid_xgb_padrao()
++topn_candidatos <- obter_topn_candidatos(ordem_variaveis = ordem_variaveis)
++subconjuntos <- obter_subconjuntos_candidatos(
++  ordem_variaveis = ordem_variaveis,
++  topn_candidatos = topn_candidatos$TopN
++)
++
++folds_exploratorios <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "exploratorio"
++)
++folds_confirmacao <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "confirmacao"
++)
++
++grid_xgb_exploratorio <- obter_grid_modelo_fase(
++  modelo = "XGBoost",
++  dados_sub = treino[, c(ordem_variaveis[1], "Class"), drop = FALSE],
++  fase = "exploratorio"
++)
++grid_xgb_confirmacao <- obter_grid_modelo_fase(
++  modelo = "XGBoost",
++  dados_sub = treino[, c(ordem_variaveis[1], "Class"), drop = FALSE],
++  fase = "confirmacao"
++)
+ 
+-print(subconjuntos)
++print(topn_candidatos)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 2 - Treinar XGBoost
++# BLOCO 2 - Benchmark exploratorio sem balanceamento
+ # ------------------------------------------------------------------------------
+-resultados_xgb <- list()
+-contador <- 1
++resultados_exploratorios <- list()
+ 
+-for (nome_sub in names(subconjuntos)) {
+-  vars_sub <- subconjuntos[[nome_sub]]
++for (idx_sub in seq_along(subconjuntos)) {
++  nome_sub <- names(subconjuntos)[idx_sub]
++  vars_sub <- subconjuntos[[idx_sub]]
++  topn_sub <- as.integer(gsub("^Top", "", nome_sub))
+   dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
+   formula_sub <- montar_formula(vars_sub)
+ 
+-  set.seed(SEED_PROJETO)
+-  folds_cv <- caret::createFolds(dados_sub$Class, k = CV_FOLDS_PADRAO, returnTrain = FALSE)
+-
+   cat("\n====================================================\n")
+-  cat("Subconjunto:", nome_sub, "\n")
++  cat("Fase exploratoria - Subconjunto:", nome_sub, "\n")
+   cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
+   cat("====================================================\n")
+ 
+   tabela_xgb_sub <- avaliar_xgb_cv(
+     dados = dados_sub,
+-    folds = folds_cv,
+-    grid_xgb = grid_xgb,
++    folds = folds_exploratorios,
++    grid_xgb = grid_xgb_exploratorio,
+     aplicar_smotenc = FALSE,
+     formula_modelo = formula_sub
+   )
+ 
+-  resultados_xgb[[contador]] <- tabela_xgb_sub %>%
+-    dplyr::arrange(desc(ROC), desc(F1), desc(GMean)) %>%
+-    dplyr::slice(1) %>%
+-    dplyr::mutate(
++  resultados_exploratorios[[idx_sub]] <- extrair_melhor_resultado_xgb(
++    tabela_xgb_sub,
++    metadata = list(
+       Subconjunto = nome_sub,
++      TopN = topn_sub,
+       Modelo = "XGBoost",
+       Variaveis = paste(vars_sub, collapse = ", "),
+       Base_Treino = "TreinoCompleto",
+       Usa_SMOTENC = FALSE
+     )
+-  contador <- contador + 1
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "exploratorio",
++      folds_cv = folds_exploratorios
++    )
++}
++
++tabela_exploratoria <- dplyr::bind_rows(resultados_exploratorios) %>%
++  dplyr::left_join(topn_candidatos, by = "TopN") %>%
++  dplyr::select(
++    Subconjunto, TopN, Modelo,
++    ROC, Sens, Spec, Precision, F1, GMean,
++    dplyr::everything()
++  ) %>%
++  dplyr::arrange(TopN)
++
++finalistas_confirmacao <- selecionar_finalistas_modelagem(
++  tabela = tabela_exploratoria,
++  n_por_modelo = N_FINALISTAS_CONFIRMACAO_SEM_BALANCEAMENTO
++)
++
++print(finalistas_confirmacao)
++
++# ------------------------------------------------------------------------------
++# BLOCO 3 - Confirmacao sem balanceamento apenas nos finalistas
++# ------------------------------------------------------------------------------
++resultados_confirmacao <- list()
++
++for (i in seq_len(nrow(finalistas_confirmacao))) {
++  config_atual <- finalistas_confirmacao[i, , drop = FALSE]
++  vars_sub <- parse_variaveis(config_atual$Variaveis[1])
++  dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
++  formula_sub <- montar_formula(vars_sub)
++
++  cat("\n====================================================\n")
++  cat("Fase de confirmacao -", config_atual$Modelo[1], "-", config_atual$Subconjunto[1], "\n")
++  cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
++  cat("====================================================\n")
++
++  tabela_xgb_sub <- avaliar_xgb_cv(
++    dados = dados_sub,
++    folds = folds_confirmacao,
++    grid_xgb = grid_xgb_confirmacao,
++    aplicar_smotenc = FALSE,
++    formula_modelo = formula_sub
++  )
++
++  resultados_confirmacao[[i]] <- extrair_melhor_resultado_xgb(
++    tabela_xgb_sub,
++    metadata = list(
++      Subconjunto = config_atual$Subconjunto[1],
++      TopN = config_atual$TopN[1],
++      Modelo = "XGBoost",
++      Variaveis = config_atual$Variaveis[1],
++      Base_Treino = "TreinoCompleto",
++      Usa_SMOTENC = FALSE
++    )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "confirmacao",
++      folds_cv = folds_confirmacao
++    ) %>%
++    dplyr::left_join(topn_candidatos, by = "TopN")
+ }
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 3 - Consolidar resultados
++# BLOCO 4 - Consolidar resultados confirmados
+ # ------------------------------------------------------------------------------
+-tabela_xgb <- dplyr::bind_rows(resultados_xgb) %>%
++tabela_xgb <- dplyr::bind_rows(resultados_confirmacao) %>%
+   dplyr::select(
+-    Subconjunto, Modelo,
++    Subconjunto, TopN, Modelo,
+     ROC, Sens, Spec, Precision, F1, GMean,
+     dplyr::everything()
+   ) %>%
+-  dplyr::arrange(desc(ROC), desc(F1), desc(GMean))
++  ordenar_resultados_modelagem()
+ 
+ if (file.exists("objetos/tabela_benchmark_glm_rf_sem_balanceamento.rds")) {
+   tabela_glm_rf <- readRDS("objetos/tabela_benchmark_glm_rf_sem_balanceamento.rds")
+   tabela_benchmark_completa <- dplyr::bind_rows(tabela_glm_rf, tabela_xgb) %>%
+-    dplyr::arrange(desc(ROC), desc(F1), desc(GMean))
++    ordenar_resultados_modelagem()
+ } else {
+   tabela_benchmark_completa <- tabela_xgb
+ }
+ 
++if (file.exists("objetos/tabela_benchmark_glm_rf_sem_balanceamento_exploratorio.rds")) {
++  tabela_glm_rf_expl <- readRDS("objetos/tabela_benchmark_glm_rf_sem_balanceamento_exploratorio.rds")
++  tabela_benchmark_exploratoria <- dplyr::bind_rows(tabela_glm_rf_expl, tabela_exploratoria) %>%
++    ordenar_resultados_modelagem()
++} else {
++  tabela_benchmark_exploratoria <- tabela_exploratoria
++}
++
+ print(tabela_benchmark_completa)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 4 - Graficos
++# BLOCO 5 - Graficos
+ # ------------------------------------------------------------------------------
+ grafico_roc_modelos <- ggplot2::ggplot(
+   tabela_benchmark_completa,
+@@ -94,7 +187,7 @@ grafico_roc_modelos <- ggplot2::ggplot(
+     size = 3
+   ) +
+   ggplot2::labs(
+-    title = "ROC por modelo e subconjunto",
++    title = "ROC confirmado por modelo e subconjunto",
+     x = "Subconjunto",
+     y = "ROC"
+   ) +
+@@ -112,7 +205,7 @@ grafico_f1_modelos <- ggplot2::ggplot(
+     size = 3
+   ) +
+   ggplot2::labs(
+-    title = "F1 por modelo e subconjunto",
++    title = "F1 confirmado por modelo e subconjunto",
+     x = "Subconjunto",
+     y = "F1"
+   ) +
+@@ -122,11 +215,29 @@ print(grafico_roc_modelos)
+ print(grafico_f1_modelos)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 5 - Salvar resultados
++# BLOCO 6 - Salvar resultados
+ # ------------------------------------------------------------------------------
++saveRDS(
++  tabela_exploratoria,
++  "objetos/tabela_xgboost_subconjuntos_sem_balanceamento_exploratorio.rds"
++)
++readr::write_csv(
++  tabela_exploratoria,
++  "resultados/tabela_xgboost_subconjuntos_sem_balanceamento_exploratorio.csv"
++)
++
+ saveRDS(tabela_xgb, "objetos/tabela_xgboost_subconjuntos_sem_balanceamento.rds")
+ readr::write_csv(tabela_xgb, "resultados/tabela_xgboost_subconjuntos_sem_balanceamento.csv")
+ 
++saveRDS(
++  tabela_benchmark_exploratoria,
++  "objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds"
++)
++readr::write_csv(
++  tabela_benchmark_exploratoria,
++  "resultados/tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.csv"
++)
++
+ saveRDS(
+   tabela_benchmark_completa,
+   "objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds"
+diff --git a/05C_svm_subconjuntos.R b/05C_svm_subconjuntos.R
+index 70f559b..00fef16 100644
+--- a/05C_svm_subconjuntos.R
++++ b/05C_svm_subconjuntos.R
+@@ -1,85 +1,168 @@
+ # ==============================================================================
+ # 05C_svm_subconjuntos.R
+-# Responsabilidade: benchmark de SVM radial nos subconjuntos Top-10/13/14.
+-# A busca em grid usa 3 sigmas e 5 valores de C no treino completo.
++# Responsabilidade:
++# 1) fase exploratoria barata para SVM radial em subconjuntos candidatos;
++# 2) fase de confirmacao apenas nos finalistas sem balanceamento.
+ # ==============================================================================
+ 
+ source("00_setup.R")
+ source("R/funcoes_modelos.R")
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 1 - Carregar dados e ranking
++# BLOCO 1 - Carregar dados e definir subconjuntos candidatos
+ # ------------------------------------------------------------------------------
+ treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
+ ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+ 
+ ordem_variaveis <- ranking_variaveis$Variavel_Original
+-subconjuntos <- obter_subconjuntos_fixos(ordem_variaveis)
++topn_candidatos <- obter_topn_candidatos(ordem_variaveis = ordem_variaveis)
++subconjuntos <- obter_subconjuntos_candidatos(
++  ordem_variaveis = ordem_variaveis,
++  topn_candidatos = topn_candidatos$TopN
++)
++
++folds_exploratorios <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "exploratorio"
++)
++folds_confirmacao <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "confirmacao"
++)
+ 
+-print(subconjuntos)
++print(topn_candidatos)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 2 - Treinar SVM radial
++# BLOCO 2 - Benchmark exploratorio sem balanceamento
+ # ------------------------------------------------------------------------------
+-resultados_svm <- list()
+-contador <- 1
++resultados_exploratorios <- list()
+ 
+-for (nome_sub in names(subconjuntos)) {
+-  vars_sub <- subconjuntos[[nome_sub]]
++for (idx_sub in seq_along(subconjuntos)) {
++  nome_sub <- names(subconjuntos)[idx_sub]
++  vars_sub <- subconjuntos[[idx_sub]]
++  topn_sub <- as.integer(gsub("^Top", "", nome_sub))
+   dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
+   formula_sub <- montar_formula(vars_sub)
+-  grid_svm <- grid_svm_padrao(dados_sub = dados_sub)
+ 
+   cat("\n====================================================\n")
+-  cat("Subconjunto:", nome_sub, "\n")
++  cat("Fase exploratoria - Subconjunto:", nome_sub, "\n")
+   cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
+-  cat("Grid SVM:\n")
+-  print(grid_svm)
+   cat("====================================================\n")
+ 
+   modelo_svm <- treinar_modelo_caret(
+     modelo = "SVM_Radial",
+     formula_modelo = formula_sub,
+     dados_sub = dados_sub,
+-    tune_grid = grid_svm
++    fase_validacao = "exploratorio",
++    folds_cv = folds_exploratorios
+   )
+ 
+-  resultados_svm[[contador]] <- extrair_melhor_resultado_caret(
++  resultados_exploratorios[[idx_sub]] <- extrair_melhor_resultado_caret(
+     modelo_svm,
+     metadata = list(
+       Subconjunto = nome_sub,
++      TopN = topn_sub,
+       Modelo = "SVM_Radial",
+       Variaveis = paste(vars_sub, collapse = ", "),
+       Base_Treino = "TreinoCompleto",
+       Usa_SMOTENC = FALSE
+     )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "exploratorio",
++      folds_cv = folds_exploratorios
++    )
++}
++
++tabela_exploratoria <- dplyr::bind_rows(resultados_exploratorios) %>%
++  dplyr::left_join(topn_candidatos, by = "TopN") %>%
++  dplyr::select(
++    Subconjunto, TopN, Modelo,
++    ROC, Sens, Spec, Precision, F1, GMean,
++    dplyr::everything()
++  ) %>%
++  dplyr::arrange(TopN)
++
++finalistas_confirmacao <- selecionar_finalistas_modelagem(
++  tabela = tabela_exploratoria,
++  n_por_modelo = N_FINALISTAS_CONFIRMACAO_SEM_BALANCEAMENTO
++)
++
++print(finalistas_confirmacao)
++
++# ------------------------------------------------------------------------------
++# BLOCO 3 - Confirmacao sem balanceamento apenas nos finalistas
++# ------------------------------------------------------------------------------
++resultados_confirmacao <- list()
++
++for (i in seq_len(nrow(finalistas_confirmacao))) {
++  config_atual <- finalistas_confirmacao[i, , drop = FALSE]
++  vars_sub <- parse_variaveis(config_atual$Variaveis[1])
++  dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
++  formula_sub <- montar_formula(vars_sub)
++
++  cat("\n====================================================\n")
++  cat("Fase de confirmacao -", config_atual$Modelo[1], "-", config_atual$Subconjunto[1], "\n")
++  cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
++  cat("====================================================\n")
++
++  modelo_svm <- treinar_modelo_caret(
++    modelo = "SVM_Radial",
++    formula_modelo = formula_sub,
++    dados_sub = dados_sub,
++    fase_validacao = "confirmacao",
++    folds_cv = folds_confirmacao
+   )
+-  contador <- contador + 1
++
++  resultados_confirmacao[[i]] <- extrair_melhor_resultado_caret(
++    modelo_svm,
++    metadata = list(
++      Subconjunto = config_atual$Subconjunto[1],
++      TopN = config_atual$TopN[1],
++      Modelo = "SVM_Radial",
++      Variaveis = config_atual$Variaveis[1],
++      Base_Treino = "TreinoCompleto",
++      Usa_SMOTENC = FALSE
++    )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "confirmacao",
++      folds_cv = folds_confirmacao
++    ) %>%
++    dplyr::left_join(topn_candidatos, by = "TopN")
+ }
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 3 - Consolidar resultados
++# BLOCO 4 - Consolidar resultados confirmados
+ # ------------------------------------------------------------------------------
+-tabela_svm <- dplyr::bind_rows(resultados_svm) %>%
++tabela_svm <- dplyr::bind_rows(resultados_confirmacao) %>%
+   dplyr::select(
+-    Subconjunto, Modelo,
++    Subconjunto, TopN, Modelo,
+     ROC, Sens, Spec, Precision, F1, GMean,
+     dplyr::everything()
+   ) %>%
+-  dplyr::arrange(desc(ROC), desc(F1), desc(GMean))
++  ordenar_resultados_modelagem()
+ 
+ if (file.exists("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds")) {
+   tabela_base <- readRDS("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento.rds")
+   tabela_benchmark_completa <- dplyr::bind_rows(tabela_base, tabela_svm) %>%
+-    dplyr::arrange(desc(ROC), desc(F1), desc(GMean))
++    ordenar_resultados_modelagem()
+ } else {
+   tabela_benchmark_completa <- tabela_svm
+ }
+ 
++if (file.exists("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds")) {
++  tabela_base_expl <- readRDS("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds")
++  tabela_benchmark_exploratoria <- dplyr::bind_rows(tabela_base_expl, tabela_exploratoria) %>%
++    ordenar_resultados_modelagem()
++} else {
++  tabela_benchmark_exploratoria <- tabela_exploratoria
++}
++
+ print(tabela_benchmark_completa)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 4 - Graficos
++# BLOCO 5 - Graficos
+ # ------------------------------------------------------------------------------
+ grafico_roc_modelos <- ggplot2::ggplot(
+   tabela_benchmark_completa,
+@@ -93,7 +176,7 @@ grafico_roc_modelos <- ggplot2::ggplot(
+     size = 3
+   ) +
+   ggplot2::labs(
+-    title = "ROC por modelo e subconjunto",
++    title = "ROC confirmado por modelo e subconjunto",
+     x = "Subconjunto",
+     y = "ROC"
+   ) +
+@@ -111,7 +194,7 @@ grafico_f1_modelos <- ggplot2::ggplot(
+     size = 3
+   ) +
+   ggplot2::labs(
+-    title = "F1 por modelo e subconjunto",
++    title = "F1 confirmado por modelo e subconjunto",
+     x = "Subconjunto",
+     y = "F1"
+   ) +
+@@ -121,11 +204,29 @@ print(grafico_roc_modelos)
+ print(grafico_f1_modelos)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 5 - Salvar resultados
++# BLOCO 6 - Salvar resultados
+ # ------------------------------------------------------------------------------
++saveRDS(
++  tabela_exploratoria,
++  "objetos/tabela_svm_subconjuntos_sem_balanceamento_exploratorio.rds"
++)
++readr::write_csv(
++  tabela_exploratoria,
++  "resultados/tabela_svm_subconjuntos_sem_balanceamento_exploratorio.csv"
++)
++
+ saveRDS(tabela_svm, "objetos/tabela_svm_subconjuntos_sem_balanceamento.rds")
+ readr::write_csv(tabela_svm, "resultados/tabela_svm_subconjuntos_sem_balanceamento.csv")
+ 
++saveRDS(
++  tabela_benchmark_exploratoria,
++  "objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds"
++)
++readr::write_csv(
++  tabela_benchmark_exploratoria,
++  "resultados/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.csv"
++)
++
+ saveRDS(
+   tabela_benchmark_completa,
+   "objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds"
+diff --git a/05D_redes_neurais_subconjuntos.R b/05D_redes_neurais_subconjuntos.R
+index 7fb270a..2fd9a64 100644
+--- a/05D_redes_neurais_subconjuntos.R
++++ b/05D_redes_neurais_subconjuntos.R
+@@ -1,36 +1,52 @@
+ # ==============================================================================
+ # 05D_redes_neurais_subconjuntos.R
+-# Responsabilidade: benchmark de NNET e avNNet nos subconjuntos Top-10/13/14.
++# Responsabilidade:
++# 1) fase exploratoria barata para NNET e avNNet em subconjuntos candidatos;
++# 2) fase de confirmacao apenas nos finalistas sem balanceamento.
+ # ==============================================================================
+ 
+ source("00_setup.R")
+ source("R/funcoes_modelos.R")
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 1 - Carregar dados e ranking
++# BLOCO 1 - Carregar dados e definir subconjuntos candidatos
+ # ------------------------------------------------------------------------------
+ treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
+ ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+ 
+ ordem_variaveis <- ranking_variaveis$Variavel_Original
+-subconjuntos <- obter_subconjuntos_fixos(ordem_variaveis)
++topn_candidatos <- obter_topn_candidatos(ordem_variaveis = ordem_variaveis)
++subconjuntos <- obter_subconjuntos_candidatos(
++  ordem_variaveis = ordem_variaveis,
++  topn_candidatos = topn_candidatos$TopN
++)
+ modelos_redes <- c("NNET", "avNNet")
+ 
+-print(subconjuntos)
++folds_exploratorios <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "exploratorio"
++)
++folds_confirmacao <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "confirmacao"
++)
++
++print(topn_candidatos)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 2 - Treinar redes neurais
++# BLOCO 2 - Benchmark exploratorio sem balanceamento
+ # ------------------------------------------------------------------------------
+-resultados_redes <- list()
++resultados_exploratorios <- list()
+ contador <- 1
+ 
+ for (nome_sub in names(subconjuntos)) {
+   vars_sub <- subconjuntos[[nome_sub]]
++  topn_sub <- as.integer(gsub("^Top", "", nome_sub))
+   dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
+   formula_sub <- montar_formula(vars_sub)
+ 
+   cat("\n====================================================\n")
+-  cat("Subconjunto:", nome_sub, "\n")
++  cat("Fase exploratoria - Subconjunto:", nome_sub, "\n")
+   cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
+   cat("====================================================\n")
+ 
+@@ -38,33 +54,98 @@ for (nome_sub in names(subconjuntos)) {
+     modelo_ajustado <- treinar_modelo_caret(
+       modelo = modelo_rede,
+       formula_modelo = formula_sub,
+-      dados_sub = dados_sub
++      dados_sub = dados_sub,
++      fase_validacao = "exploratorio",
++      folds_cv = folds_exploratorios
+     )
+ 
+-    resultados_redes[[contador]] <- extrair_melhor_resultado_caret(
++    resultados_exploratorios[[contador]] <- extrair_melhor_resultado_caret(
+       modelo_ajustado,
+       metadata = list(
+         Subconjunto = nome_sub,
++        TopN = topn_sub,
+         Modelo = modelo_rede,
+         Variaveis = paste(vars_sub, collapse = ", "),
+         Base_Treino = "TreinoCompleto",
+         Usa_SMOTENC = FALSE
+       )
+-    )
++    ) %>%
++      adicionar_contexto_validacao(
++        fase = "exploratorio",
++        folds_cv = folds_exploratorios
++      )
+     contador <- contador + 1
+   }
+ }
+ 
++tabela_exploratoria <- dplyr::bind_rows(resultados_exploratorios) %>%
++  dplyr::left_join(topn_candidatos, by = "TopN") %>%
++  dplyr::select(
++    Subconjunto, TopN, Modelo,
++    ROC, Sens, Spec, Precision, F1, GMean,
++    dplyr::everything()
++  ) %>%
++  dplyr::arrange(Modelo, TopN)
++
++finalistas_confirmacao <- selecionar_finalistas_modelagem(
++  tabela = tabela_exploratoria,
++  n_por_modelo = N_FINALISTAS_CONFIRMACAO_SEM_BALANCEAMENTO
++)
++
++print(finalistas_confirmacao)
++
+ # ------------------------------------------------------------------------------
+-# BLOCO 3 - Consolidar resultados
++# BLOCO 3 - Confirmacao sem balanceamento apenas nos finalistas
+ # ------------------------------------------------------------------------------
+-tabela_redes <- dplyr::bind_rows(resultados_redes) %>%
++resultados_confirmacao <- list()
++
++for (i in seq_len(nrow(finalistas_confirmacao))) {
++  config_atual <- finalistas_confirmacao[i, , drop = FALSE]
++  vars_sub <- parse_variaveis(config_atual$Variaveis[1])
++  dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
++  formula_sub <- montar_formula(vars_sub)
++
++  cat("\n====================================================\n")
++  cat("Fase de confirmacao -", config_atual$Modelo[1], "-", config_atual$Subconjunto[1], "\n")
++  cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
++  cat("====================================================\n")
++
++  modelo_ajustado <- treinar_modelo_caret(
++    modelo = config_atual$Modelo[1],
++    formula_modelo = formula_sub,
++    dados_sub = dados_sub,
++    fase_validacao = "confirmacao",
++    folds_cv = folds_confirmacao
++  )
++
++  resultados_confirmacao[[i]] <- extrair_melhor_resultado_caret(
++    modelo_ajustado,
++    metadata = list(
++      Subconjunto = config_atual$Subconjunto[1],
++      TopN = config_atual$TopN[1],
++      Modelo = config_atual$Modelo[1],
++      Variaveis = config_atual$Variaveis[1],
++      Base_Treino = "TreinoCompleto",
++      Usa_SMOTENC = FALSE
++    )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "confirmacao",
++      folds_cv = folds_confirmacao
++    ) %>%
++    dplyr::left_join(topn_candidatos, by = "TopN")
++}
++
++# ------------------------------------------------------------------------------
++# BLOCO 4 - Consolidar resultados confirmados
++# ------------------------------------------------------------------------------
++tabela_redes <- dplyr::bind_rows(resultados_confirmacao) %>%
+   dplyr::select(
+-    Subconjunto, Modelo,
++    Subconjunto, TopN, Modelo,
+     ROC, Sens, Spec, Precision, F1, GMean,
+     dplyr::everything()
+   ) %>%
+-  dplyr::arrange(desc(ROC), desc(F1), desc(GMean))
++  ordenar_resultados_modelagem()
+ 
+ if (file.exists("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds")) {
+   tabela_base <- readRDS("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds")
+@@ -74,17 +155,32 @@ if (file.exists("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento.rds")
+   tabela_base <- NULL
+ }
+ 
++if (file.exists("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds")) {
++  tabela_base_expl <- readRDS("objetos/tabela_benchmark_glm_rf_xgb_svm_sem_balanceamento_exploratorio.rds")
++} else if (file.exists("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds")) {
++  tabela_base_expl <- readRDS("objetos/tabela_benchmark_glm_rf_xgb_sem_balanceamento_exploratorio.rds")
++} else {
++  tabela_base_expl <- NULL
++}
++
+ if (!is.null(tabela_base)) {
+   tabela_benchmark_completa <- dplyr::bind_rows(tabela_base, tabela_redes) %>%
+-    dplyr::arrange(desc(ROC), desc(F1), desc(GMean))
++    ordenar_resultados_modelagem()
+ } else {
+   tabela_benchmark_completa <- tabela_redes
+ }
+ 
++if (!is.null(tabela_base_expl)) {
++  tabela_benchmark_exploratoria <- dplyr::bind_rows(tabela_base_expl, tabela_exploratoria) %>%
++    ordenar_resultados_modelagem()
++} else {
++  tabela_benchmark_exploratoria <- tabela_exploratoria
++}
++
+ print(tabela_benchmark_completa)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 4 - Graficos
++# BLOCO 5 - Graficos
+ # ------------------------------------------------------------------------------
+ grafico_roc_modelos <- ggplot2::ggplot(
+   tabela_benchmark_completa,
+@@ -98,7 +194,7 @@ grafico_roc_modelos <- ggplot2::ggplot(
+     size = 3
+   ) +
+   ggplot2::labs(
+-    title = "ROC por modelo e subconjunto",
++    title = "ROC confirmado por modelo e subconjunto",
+     x = "Subconjunto",
+     y = "ROC"
+   ) +
+@@ -116,7 +212,7 @@ grafico_f1_modelos <- ggplot2::ggplot(
+     size = 3
+   ) +
+   ggplot2::labs(
+-    title = "F1 por modelo e subconjunto",
++    title = "F1 confirmado por modelo e subconjunto",
+     x = "Subconjunto",
+     y = "F1"
+   ) +
+@@ -126,11 +222,29 @@ print(grafico_roc_modelos)
+ print(grafico_f1_modelos)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 5 - Salvar resultados
++# BLOCO 6 - Salvar resultados
+ # ------------------------------------------------------------------------------
++saveRDS(
++  tabela_exploratoria,
++  "objetos/tabela_redes_neurais_subconjuntos_sem_balanceamento_exploratorio.rds"
++)
++readr::write_csv(
++  tabela_exploratoria,
++  "resultados/tabela_redes_neurais_subconjuntos_sem_balanceamento_exploratorio.csv"
++)
++
+ saveRDS(tabela_redes, "objetos/tabela_redes_neurais_subconjuntos_sem_balanceamento.rds")
+ readr::write_csv(tabela_redes, "resultados/tabela_redes_neurais_subconjuntos_sem_balanceamento.csv")
+ 
++saveRDS(
++  tabela_benchmark_exploratoria,
++  "objetos/tabela_benchmark_modelos_sem_balanceamento_exploratorio.rds"
++)
++readr::write_csv(
++  tabela_benchmark_exploratoria,
++  "resultados/tabela_benchmark_modelos_sem_balanceamento_exploratorio.csv"
++)
++
+ saveRDS(
+   tabela_benchmark_completa,
+   "objetos/tabela_benchmark_modelos_sem_balanceamento.rds"
+diff --git a/06B_xgb_balanceamento_smotenc.R b/06B_xgb_balanceamento_smotenc.R
+index 8718325..3bed675 100644
+--- a/06B_xgb_balanceamento_smotenc.R
++++ b/06B_xgb_balanceamento_smotenc.R
+@@ -1,6 +1,7 @@
+ # ==============================================================================
+ # 06B_xgb_balanceamento_smotenc.R
+-# Responsabilidade: comparar XGBoost sem balanceamento vs com SMOTENC.
++# Responsabilidade: fase de confirmacao para XGBoost, comparando sem
++# balanceamento versus com SMOTENC apenas no melhor subconjunto confirmado.
+ # O passo step_smotenc() fica sempre com skip = TRUE.
+ # ==============================================================================
+ 
+@@ -8,72 +9,94 @@ source("00_setup.R")
+ source("R/funcoes_modelos.R")
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 1 - Carregar dados e ranking
++# BLOCO 1 - Carregar dados e finalista confirmado
+ # ------------------------------------------------------------------------------
+ treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
+-ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
++tabela_xgb_confirmada <- readRDS("objetos/tabela_xgboost_subconjuntos_sem_balanceamento.rds") %>%
++  dplyr::filter(Modelo == "XGBoost")
+ 
+-ordem_variaveis <- ranking_variaveis$Variavel_Original
+-subconjuntos <- obter_subconjuntos_fixos(ordem_variaveis, tamanhos = c(13, 14))
+-grid_xgb <- grid_xgb_padrao()
++finalistas_xgb <- selecionar_finalistas_modelagem(
++  tabela = tabela_xgb_confirmada,
++  n_por_modelo = N_FINALISTAS_BALANCEAMENTO_POR_MODELO
++)
++
++folds_confirmacao <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "confirmacao"
++)
++grid_xgb_confirmacao <- obter_grid_modelo_fase(
++  modelo = "XGBoost",
++  dados_sub = treino[, c(setdiff(names(treino), "Class")[1], "Class"), drop = FALSE],
++  fase = "confirmacao"
++)
++
++print(finalistas_xgb)
+ 
+ resultados <- list()
+ contador <- 1
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 2 - Loop por subconjunto
++# BLOCO 2 - Confirmacao do balanceamento no subconjunto finalista
+ # ------------------------------------------------------------------------------
+-for (nome_sub in names(subconjuntos)) {
+-  vars_sub <- subconjuntos[[nome_sub]]
++for (i in seq_len(nrow(finalistas_xgb))) {
++  config_atual <- finalistas_xgb[i, , drop = FALSE]
++  vars_sub <- parse_variaveis(config_atual$Variaveis[1])
+   dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
+   formula_sub <- montar_formula(vars_sub)
+ 
+-  set.seed(SEED_PROJETO)
+-  folds_xgb <- caret::createFolds(dados_sub$Class, k = CV_FOLDS_PADRAO, returnTrain = FALSE)
+-
+   cat("\n====================================================\n")
+-  cat("Subconjunto:", nome_sub, "\n")
++  cat("Confirmacao de balanceamento -", config_atual$Subconjunto[1], "\n")
+   cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
+   cat("====================================================\n")
+ 
+   tabela_base <- avaliar_xgb_cv(
+     dados = dados_sub,
+-    folds = folds_xgb,
+-    grid_xgb = grid_xgb,
++    folds = folds_confirmacao,
++    grid_xgb = grid_xgb_confirmacao,
+     aplicar_smotenc = FALSE,
+     formula_modelo = formula_sub
+   )
+ 
+-  resultados[[contador]] <- tabela_base %>%
+-    dplyr::arrange(desc(ROC), desc(F1), desc(GMean)) %>%
+-    dplyr::slice(1) %>%
+-    dplyr::mutate(
+-      Subconjunto = nome_sub,
++  resultados[[contador]] <- extrair_melhor_resultado_xgb(
++    tabela_base,
++    metadata = list(
++      Subconjunto = config_atual$Subconjunto[1],
++      TopN = config_atual$TopN[1],
+       Modelo = "XGBoost",
+       Cenario = "Sem_balanceamento",
+-      Variaveis = paste(vars_sub, collapse = ", "),
++      Variaveis = config_atual$Variaveis[1],
+       Usa_SMOTENC = FALSE
+     )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "confirmacao",
++      folds_cv = folds_confirmacao
++    )
+   contador <- contador + 1
+ 
+   tabela_smotenc <- avaliar_xgb_cv(
+     dados = dados_sub,
+-    folds = folds_xgb,
+-    grid_xgb = grid_xgb,
++    folds = folds_confirmacao,
++    grid_xgb = grid_xgb_confirmacao,
+     aplicar_smotenc = TRUE,
+     formula_modelo = formula_sub
+   )
+ 
+-  resultados[[contador]] <- tabela_smotenc %>%
+-    dplyr::arrange(desc(ROC), desc(F1), desc(GMean)) %>%
+-    dplyr::slice(1) %>%
+-    dplyr::mutate(
+-      Subconjunto = nome_sub,
++  resultados[[contador]] <- extrair_melhor_resultado_xgb(
++    tabela_smotenc,
++    metadata = list(
++      Subconjunto = config_atual$Subconjunto[1],
++      TopN = config_atual$TopN[1],
+       Modelo = "XGBoost",
+       Cenario = "Com_SMOTENC",
+-      Variaveis = paste(vars_sub, collapse = ", "),
++      Variaveis = config_atual$Variaveis[1],
+       Usa_SMOTENC = TRUE
+     )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "confirmacao",
++      folds_cv = folds_confirmacao
++    )
+   contador <- contador + 1
+ }
+ 
+@@ -82,7 +105,7 @@ for (nome_sub in names(subconjuntos)) {
+ # ------------------------------------------------------------------------------
+ tabela_xgb_balanceamento <- dplyr::bind_rows(resultados) %>%
+   dplyr::select(
+-    Subconjunto, Modelo, Cenario,
++    Subconjunto, TopN, Modelo, Cenario,
+     ROC, Sens, Spec, Precision, F1, GMean,
+     dplyr::everything()
+   ) %>%
+@@ -114,7 +137,7 @@ grafico_roc_balanceamento <- ggplot2::ggplot(
+   ) +
+   ggplot2::facet_wrap(~ Modelo) +
+   ggplot2::labs(
+-    title = "ROC: comparacao de balanceamento por modelo",
++    title = "ROC: confirmacao do balanceamento por modelo",
+     x = "Subconjunto",
+     y = "ROC"
+   ) +
+@@ -133,7 +156,7 @@ grafico_f1_balanceamento <- ggplot2::ggplot(
+   ) +
+   ggplot2::facet_wrap(~ Modelo) +
+   ggplot2::labs(
+-    title = "F1: comparacao de balanceamento por modelo",
++    title = "F1: confirmacao do balanceamento por modelo",
+     x = "Subconjunto",
+     y = "F1"
+   ) +
+diff --git a/06C_modelos_caret_balanceamento_smotenc.R b/06C_modelos_caret_balanceamento_smotenc.R
+index 5b3529c..3487b1c 100644
+--- a/06C_modelos_caret_balanceamento_smotenc.R
++++ b/06C_modelos_caret_balanceamento_smotenc.R
+@@ -1,82 +1,110 @@
+ # ==============================================================================
+ # 06C_modelos_caret_balanceamento_smotenc.R
+-# Responsabilidade: comparar SVM radial, NNET e avNNet com e sem SMOTENC.
+-# O passo step_smotenc() fica sempre com skip = TRUE.
++# Responsabilidade: fase de confirmacao para SVM radial, NNET e avNNet,
++# comparando sem balanceamento versus com SMOTENC apenas nos subconjuntos
++# finalistas de cada modelo. O passo step_smotenc() fica sempre com skip = TRUE.
+ # ==============================================================================
+ 
+ source("00_setup.R")
+ source("R/funcoes_modelos.R")
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 1 - Carregar dados e ranking
++# BLOCO 1 - Carregar dados e finalistas confirmados
+ # ------------------------------------------------------------------------------
+ treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
+-ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
+-
+-ordem_variaveis <- ranking_variaveis$Variavel_Original
+-subconjuntos <- obter_subconjuntos_fixos(ordem_variaveis, tamanhos = c(13, 14))
+ modelos_balancear <- c("SVM_Radial", "NNET", "avNNet")
+ 
++tabela_sem_balanceamento <- dplyr::bind_rows(
++  readRDS("objetos/tabela_svm_subconjuntos_sem_balanceamento.rds"),
++  readRDS("objetos/tabela_redes_neurais_subconjuntos_sem_balanceamento.rds")
++) %>%
++  dplyr::filter(Modelo %in% modelos_balancear)
++
++finalistas_modelos <- selecionar_finalistas_modelagem(
++  tabela = tabela_sem_balanceamento,
++  n_por_modelo = N_FINALISTAS_BALANCEAMENTO_POR_MODELO
++)
++
++folds_confirmacao <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "confirmacao"
++)
++
++print(finalistas_modelos)
++
+ resultados <- list()
+ contador <- 1
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 2 - Loop por subconjunto e modelo
++# BLOCO 2 - Confirmacao do balanceamento nos finalistas
+ # ------------------------------------------------------------------------------
+-for (nome_sub in names(subconjuntos)) {
+-  vars_sub <- subconjuntos[[nome_sub]]
++for (i in seq_len(nrow(finalistas_modelos))) {
++  config_atual <- finalistas_modelos[i, , drop = FALSE]
++  vars_sub <- parse_variaveis(config_atual$Variaveis[1])
+   dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
+   formula_sub <- montar_formula(vars_sub)
+ 
+   cat("\n====================================================\n")
+-  cat("Subconjunto:", nome_sub, "\n")
++  cat("Confirmacao de balanceamento -", config_atual$Modelo[1], "-", config_atual$Subconjunto[1], "\n")
+   cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
+   cat("====================================================\n")
+ 
+-  for (modelo_atual in modelos_balancear) {
+-    modelo_base <- treinar_modelo_caret(
+-      modelo = modelo_atual,
+-      formula_modelo = formula_sub,
+-      dados_sub = dados_sub,
+-      usar_smotenc = FALSE
++  modelo_base <- treinar_modelo_caret(
++    modelo = config_atual$Modelo[1],
++    formula_modelo = formula_sub,
++    dados_sub = dados_sub,
++    usar_smotenc = FALSE,
++    fase_validacao = "confirmacao",
++    folds_cv = folds_confirmacao
++  )
++
++  resultados[[contador]] <- extrair_melhor_resultado_caret(
++    modelo_base,
++    metadata = list(
++      Subconjunto = config_atual$Subconjunto[1],
++      TopN = config_atual$TopN[1],
++      Modelo = config_atual$Modelo[1],
++      Cenario = "Sem_balanceamento",
++      Variaveis = config_atual$Variaveis[1],
++      Usa_SMOTENC = FALSE
+     )
+-
+-    resultados[[contador]] <- extrair_melhor_resultado_caret(
+-      modelo_base,
+-      metadata = list(
+-        Subconjunto = nome_sub,
+-        Modelo = modelo_atual,
+-        Cenario = "Sem_balanceamento",
+-        Variaveis = paste(vars_sub, collapse = ", "),
+-        Usa_SMOTENC = FALSE
+-      )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "confirmacao",
++      folds_cv = folds_confirmacao
+     )
+-    contador <- contador + 1
+-
+-    modelo_smotenc <- treinar_modelo_caret(
+-      modelo = modelo_atual,
+-      formula_modelo = formula_sub,
+-      dados_sub = dados_sub,
+-      usar_smotenc = TRUE
++  contador <- contador + 1
++
++  modelo_smotenc <- treinar_modelo_caret(
++    modelo = config_atual$Modelo[1],
++    formula_modelo = formula_sub,
++    dados_sub = dados_sub,
++    usar_smotenc = TRUE,
++    fase_validacao = "confirmacao",
++    folds_cv = folds_confirmacao
++  )
++
++  resultados[[contador]] <- extrair_melhor_resultado_caret(
++    modelo_smotenc,
++    metadata = list(
++      Subconjunto = config_atual$Subconjunto[1],
++      TopN = config_atual$TopN[1],
++      Modelo = config_atual$Modelo[1],
++      Cenario = "Com_SMOTENC",
++      Variaveis = config_atual$Variaveis[1],
++      Usa_SMOTENC = TRUE
+     )
+-
+-    resultados[[contador]] <- extrair_melhor_resultado_caret(
+-      modelo_smotenc,
+-      metadata = list(
+-        Subconjunto = nome_sub,
+-        Modelo = modelo_atual,
+-        Cenario = "Com_SMOTENC",
+-        Variaveis = paste(vars_sub, collapse = ", "),
+-        Usa_SMOTENC = TRUE
+-      )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "confirmacao",
++      folds_cv = folds_confirmacao
+     )
+-    contador <- contador + 1
+-  }
++  contador <- contador + 1
+ }
+ 
+ tabela_balanceamento <- dplyr::bind_rows(resultados) %>%
+   dplyr::select(
+-    Subconjunto, Modelo, Cenario,
++    Subconjunto, TopN, Modelo, Cenario,
+     ROC, Sens, Spec, Precision, F1, GMean,
+     dplyr::everything()
+   ) %>%
+@@ -92,7 +120,7 @@ grafico_roc_balanceamento <- ggplot2::ggplot(
+   ggplot2::geom_point(size = 3) +
+   ggplot2::facet_wrap(~ Modelo) +
+   ggplot2::labs(
+-    title = "ROC: SMOTENC nos modelos caret adicionais",
++    title = "ROC: confirmacao do SMOTENC nos modelos caret adicionais",
+     x = "Subconjunto",
+     y = "ROC"
+   ) +
+@@ -106,7 +134,7 @@ grafico_f1_balanceamento <- ggplot2::ggplot(
+   ggplot2::geom_point(size = 3) +
+   ggplot2::facet_wrap(~ Modelo) +
+   ggplot2::labs(
+-    title = "F1: SMOTENC nos modelos caret adicionais",
++    title = "F1: confirmacao do SMOTENC nos modelos caret adicionais",
+     x = "Subconjunto",
+     y = "F1"
+   ) +
+diff --git a/06_rf_balanceamento_smotenc.R b/06_rf_balanceamento_smotenc.R
+index 5f6db63..1799862 100644
+--- a/06_rf_balanceamento_smotenc.R
++++ b/06_rf_balanceamento_smotenc.R
+@@ -1,6 +1,7 @@
+ # ==============================================================================
+ # 06_rf_balanceamento_smotenc.R
+-# Responsabilidade: comparar RF sem balanceamento vs com SMOTENC.
++# Responsabilidade: fase de confirmacao para RF, comparando sem balanceamento
++# versus com SMOTENC apenas no melhor subconjunto confirmado do modelo.
+ # O passo step_smotenc() fica sempre com skip = TRUE.
+ # ==============================================================================
+ 
+@@ -8,27 +9,38 @@ source("00_setup.R")
+ source("R/funcoes_modelos.R")
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 1 - Carregar dados e ranking
++# BLOCO 1 - Carregar dados e finalista confirmado
+ # ------------------------------------------------------------------------------
+ treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
+-ranking_variaveis <- readRDS("objetos/ranking_variaveis_enet.rds")
++tabela_rf_confirmada <- readRDS("objetos/tabela_benchmark_glm_rf_sem_balanceamento.rds") %>%
++  dplyr::filter(Modelo == "RF")
+ 
+-ordem_variaveis <- ranking_variaveis$Variavel_Original
+-subconjuntos <- obter_subconjuntos_fixos(ordem_variaveis, tamanhos = c(13, 14))
++finalistas_rf <- selecionar_finalistas_modelagem(
++  tabela = tabela_rf_confirmada,
++  n_por_modelo = N_FINALISTAS_BALANCEAMENTO_POR_MODELO
++)
++
++folds_confirmacao <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "confirmacao"
++)
++
++print(finalistas_rf)
+ 
+ resultados <- list()
+ contador <- 1
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 2 - Loop por subconjunto
++# BLOCO 2 - Confirmacao do balanceamento no subconjunto finalista
+ # ------------------------------------------------------------------------------
+-for (nome_sub in names(subconjuntos)) {
+-  vars_sub <- subconjuntos[[nome_sub]]
++for (i in seq_len(nrow(finalistas_rf))) {
++  config_atual <- finalistas_rf[i, , drop = FALSE]
++  vars_sub <- parse_variaveis(config_atual$Variaveis[1])
+   dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
+   formula_sub <- montar_formula(vars_sub)
+ 
+   cat("\n====================================================\n")
+-  cat("Subconjunto:", nome_sub, "\n")
++  cat("Confirmacao de balanceamento -", config_atual$Subconjunto[1], "\n")
+   cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
+   cat("====================================================\n")
+ 
+@@ -36,38 +48,52 @@ for (nome_sub in names(subconjuntos)) {
+     modelo = "RF",
+     formula_modelo = formula_sub,
+     dados_sub = dados_sub,
+-    usar_smotenc = FALSE
++    usar_smotenc = FALSE,
++    fase_validacao = "confirmacao",
++    folds_cv = folds_confirmacao
+   )
+ 
+   resultados[[contador]] <- extrair_melhor_resultado_caret(
+     modelo_rf_base,
+     metadata = list(
+-      Subconjunto = nome_sub,
++      Subconjunto = config_atual$Subconjunto[1],
++      TopN = config_atual$TopN[1],
+       Modelo = "RF",
+       Cenario = "Sem_balanceamento",
+-      Variaveis = paste(vars_sub, collapse = ", "),
++      Variaveis = config_atual$Variaveis[1],
+       Usa_SMOTENC = FALSE
+     )
+-  )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "confirmacao",
++      folds_cv = folds_confirmacao
++    )
+   contador <- contador + 1
+ 
+   modelo_rf_smotenc <- treinar_modelo_caret(
+     modelo = "RF",
+     formula_modelo = formula_sub,
+     dados_sub = dados_sub,
+-    usar_smotenc = TRUE
++    usar_smotenc = TRUE,
++    fase_validacao = "confirmacao",
++    folds_cv = folds_confirmacao
+   )
+ 
+   resultados[[contador]] <- extrair_melhor_resultado_caret(
+     modelo_rf_smotenc,
+     metadata = list(
+-      Subconjunto = nome_sub,
++      Subconjunto = config_atual$Subconjunto[1],
++      TopN = config_atual$TopN[1],
+       Modelo = "RF",
+       Cenario = "Com_SMOTENC",
+-      Variaveis = paste(vars_sub, collapse = ", "),
++      Variaveis = config_atual$Variaveis[1],
+       Usa_SMOTENC = TRUE
+     )
+-  )
++  ) %>%
++    adicionar_contexto_validacao(
++      fase = "confirmacao",
++      folds_cv = folds_confirmacao
++    )
+   contador <- contador + 1
+ }
+ 
+@@ -76,7 +102,7 @@ for (nome_sub in names(subconjuntos)) {
+ # ------------------------------------------------------------------------------
+ tabela_balanceamento <- dplyr::bind_rows(resultados) %>%
+   dplyr::select(
+-    Subconjunto, Modelo, Cenario,
++    Subconjunto, TopN, Modelo, Cenario,
+     ROC, Sens, Spec, Precision, F1, GMean,
+     dplyr::everything()
+   ) %>%
+@@ -99,7 +125,7 @@ grafico_roc_balanceamento <- ggplot2::ggplot(
+     size = 3
+   ) +
+   ggplot2::labs(
+-    title = "RF: ROC sem balanceamento vs com SMOTENC",
++    title = "RF: ROC confirmado sem balanceamento vs com SMOTENC",
+     x = "Subconjunto",
+     y = "ROC"
+   ) +
+@@ -117,7 +143,7 @@ grafico_f1_balanceamento <- ggplot2::ggplot(
+     size = 3
+   ) +
+   ggplot2::labs(
+-    title = "RF: F1 sem balanceamento vs com SMOTENC",
++    title = "RF: F1 confirmado sem balanceamento vs com SMOTENC",
+     x = "Subconjunto",
+     y = "F1"
+   ) +
+diff --git a/07_threshold_calibracao.R b/07_threshold_calibracao.R
+index b298f36..13cd5b7 100644
+--- a/07_threshold_calibracao.R
++++ b/07_threshold_calibracao.R
+@@ -1,6 +1,7 @@
+ # ==============================================================================
+ # 07_threshold_calibracao.R
+-# Responsabilidade: calibrar thresholds via OOF para todos os modelos finais.
++# Responsabilidade: calibrar thresholds via OOF apenas para os finalistas
++# confirmados. A selecao do threshold continua fora do teste final.
+ # Observacao de negocio:
+ # Em credito, perder um inadimplente (falso negativo) tende a custar mais do que
+ # barrar um bom pagador (falso positivo). Por isso sensibilidade precisa ser
+@@ -11,7 +12,7 @@ source("00_setup.R")
+ source("R/funcoes_modelos.R")
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 1 - Carregar treino e tabelas de benchmark
++# BLOCO 1 - Carregar treino e tabelas confirmadas
+ # ------------------------------------------------------------------------------
+ treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
+ tabela_benchmark <- readRDS("objetos/tabela_benchmark_modelos_sem_balanceamento.rds")
+@@ -33,56 +34,52 @@ carregar_balanceamentos <- function() {
+ }
+ 
+ tabela_balanceamento <- carregar_balanceamentos()
++folds_confirmacao <- criar_folds_estratificados(
++  y = treino$Class,
++  fase = "confirmacao"
++)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 2 - Montar cenarios candidatos
++# BLOCO 2 - Selecionar finalistas confirmados por modelo
+ # ------------------------------------------------------------------------------
+-configs_base <- tabela_benchmark %>%
+-  dplyr::group_by(Modelo) %>%
+-  dplyr::arrange(dplyr::desc(ROC), dplyr::desc(F1), dplyr::desc(GMean), .by_group = TRUE) %>%
+-  dplyr::slice(1) %>%
+-  dplyr::ungroup() %>%
++configs_base <- selecionar_melhor_cenario_por_modelo(tabela_benchmark) %>%
+   dplyr::mutate(
+     Usa_SMOTENC = FALSE,
++    Origem_Finalista = "Confirmacao_SemBalanceamento",
+     Cenario = paste0(Modelo, "_", Subconjunto, "_SemBalanceamento")
+   )
+ 
+ if (!is.null(tabela_balanceamento)) {
+   configs_smotenc <- tabela_balanceamento %>%
+     dplyr::filter(Cenario == "Com_SMOTENC") %>%
+-    dplyr::group_by(Modelo) %>%
+-    dplyr::arrange(dplyr::desc(ROC), dplyr::desc(F1), dplyr::desc(GMean), .by_group = TRUE) %>%
+-    dplyr::slice(1) %>%
+-    dplyr::ungroup() %>%
++    selecionar_melhor_cenario_por_modelo() %>%
+     dplyr::mutate(
+       Usa_SMOTENC = TRUE,
++      Origem_Finalista = "Confirmacao_ComSMOTENC",
+       Cenario = paste0(Modelo, "_", Subconjunto, "_ComSMOTENC")
+     )
+ } else {
+   configs_smotenc <- tibble::tibble()
+ }
+ 
+-configs_candidatos <- dplyr::bind_rows(configs_base, configs_smotenc) %>%
+-  dplyr::mutate(TopN = as.integer(gsub("^Top", "", Subconjunto))) %>%
+-  dplyr::arrange(Modelo, Usa_SMOTENC)
++configs_finalistas <- dplyr::bind_rows(configs_base, configs_smotenc) %>%
++  selecionar_melhor_cenario_por_modelo() %>%
++  dplyr::arrange(Modelo)
+ 
+-print(configs_candidatos)
++print(configs_finalistas)
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 3 - Gerar predicoes OOF
++# BLOCO 3 - Gerar predicoes OOF nos finalistas
+ # ------------------------------------------------------------------------------
+-gerar_predicoes_oof <- function(config_modelo, treino_df) {
++gerar_predicoes_oof <- function(config_modelo, treino_df, folds_cv) {
+   vars_modelo <- parse_variaveis(config_modelo$Variaveis[1])
+   dados_sub <- treino_df[, c(vars_modelo, "Class"), drop = FALSE]
+   formula_sub <- montar_formula(vars_modelo)
+ 
+   if (config_modelo$Modelo[1] == "XGBoost") {
+-    set.seed(SEED_PROJETO)
+-    folds_xgb <- caret::createFolds(dados_sub$Class, k = CV_FOLDS_PADRAO, returnTrain = FALSE)
+-
+     resultado_xgb <- avaliar_xgb_oof(
+       dados = dados_sub,
+-      folds = folds_xgb,
++      folds = folds_cv,
+       grid_xgb = obter_grid_modelo_config(config_modelo),
+       aplicar_smotenc = isTRUE(config_modelo$Usa_SMOTENC[1]),
+       formula_modelo = formula_sub
+@@ -97,22 +94,28 @@ gerar_predicoes_oof <- function(config_modelo, treino_df) {
+     dados_sub = dados_sub,
+     tune_grid = obter_grid_modelo_config(config_modelo),
+     usar_smotenc = isTRUE(config_modelo$Usa_SMOTENC[1]),
+-    cv_repeats = 1,
+-    save_predictions = TRUE
++    save_predictions = TRUE,
++    fase_validacao = "confirmacao",
++    folds_cv = folds_cv
+   )
+ 
+   extrair_predicoes_oof_caret(modelo_oof)
+ }
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 4 - Calibrar threshold por cenario
++# BLOCO 4 - Calibrar threshold por finalista
+ # ------------------------------------------------------------------------------
+ tabela_thresholds <- list()
+ config_modelos <- list()
+ 
+-for (i in seq_len(nrow(configs_candidatos))) {
+-  config_atual <- configs_candidatos[i, , drop = FALSE]
+-  pred_oof <- gerar_predicoes_oof(config_atual, treino_df = treino)
++for (i in seq_len(nrow(configs_finalistas))) {
++  config_atual <- configs_finalistas[i, , drop = FALSE]
++  pred_oof <- gerar_predicoes_oof(
++    config_modelo = config_atual,
++    treino_df = treino,
++    folds_cv = folds_confirmacao
++  )
++
+   threshold_youden <- encontrar_threshold_youden(
+     obs = pred_oof$obs,
+     prob_deve = pred_oof$Deve
+@@ -175,7 +178,7 @@ grafico_metricas_threshold <- ggplot2::ggplot(
+   ggplot2::geom_col(position = "dodge") +
+   ggplot2::facet_wrap(~ Cenario) +
+   ggplot2::labs(
+-    title = "Impacto do threshold padrao vs Youden",
++    title = "Impacto do threshold padrao vs Youden nos finalistas",
+     subtitle = "Sensibilidade merece leitura prioritaria em credito",
+     x = "Metrica",
+     y = "Valor"
+@@ -190,6 +193,9 @@ print(grafico_metricas_threshold)
+ saveRDS(tabela_thresholds, "objetos/tabela_thresholds_finais.rds")
+ readr::write_csv(tabela_thresholds, "resultados/tabela_thresholds_finais.csv")
+ 
++saveRDS(configs_finalistas, "objetos/config_modelos_finalistas_confirmacao.rds")
++readr::write_csv(configs_finalistas, "resultados/config_modelos_finalistas_confirmacao.csv")
++
+ saveRDS(config_modelos, "objetos/config_modelos_finais.rds")
+ readr::write_csv(config_modelos, "resultados/config_modelos_finais.csv")
+ 
+diff --git a/08_avaliacao_teste.R b/08_avaliacao_teste.R
+index e26e020..34ad100 100644
+--- a/08_avaliacao_teste.R
++++ b/08_avaliacao_teste.R
+@@ -1,6 +1,6 @@
+ # ==============================================================================
+ # 08_avaliacao_teste.R
+-# Responsabilidade: avaliar no teste todos os cenarios calibrados.
++# Responsabilidade: avaliar no teste apenas os cenarios finalistas calibrados.
+ # Nota metodologica:
+ # Sensibilidade mede a capacidade de encontrar inadimplentes reais.
+ # Especificidade mede a capacidade de preservar bons pagadores.
+@@ -12,7 +12,7 @@ source("00_setup.R")
+ source("R/funcoes_modelos.R")
+ 
+ # ------------------------------------------------------------------------------
+-# BLOCO 1 - Carregar dados e configuracoes
++# BLOCO 1 - Carregar dados e configuracoes finais
+ # ------------------------------------------------------------------------------
+ treino <- garantir_ordem_classe(readRDS("objetos/treino.rds"))
+ teste <- garantir_ordem_classe(readRDS("objetos/teste.rds"))
+@@ -30,7 +30,7 @@ for (i in seq_len(nrow(config_modelos))) {
+   config_atual <- config_modelos[i, , drop = FALSE]
+ 
+   cat("\n====================================================\n")
+-  cat("Treinando cenario:", config_atual$Cenario[1], "\n")
++  cat("Treinando cenario finalista:", config_atual$Cenario[1], "\n")
+   cat("Modelo:", config_atual$Modelo[1], "\n")
+   cat("====================================================\n")
+ 
+@@ -51,7 +51,9 @@ for (i in seq_len(nrow(config_modelos))) {
+       Modelo = config_atual$Modelo[1],
+       Subconjunto = config_atual$Subconjunto[1],
+       Usa_SMOTENC = config_atual$Usa_SMOTENC[1],
+-      TopN = config_atual$TopN[1]
++      TopN = config_atual$TopN[1],
++      Origem_Finalista = config_atual$Origem_Finalista[1],
++      Fase_Protocolo = config_atual$Fase_Protocolo[1]
+     )
+ 
+   resultados_teste[[i]] <- metricas_teste
+diff --git a/R/funcoes_metricas.R b/R/funcoes_metricas.R
+index bb04179..d90df96 100644
+--- a/R/funcoes_metricas.R
++++ b/R/funcoes_metricas.R
+@@ -192,10 +192,10 @@ adicionar_metricas_negocio <- function(
+ 
+ criar_tabela_shap_vs_enet <- function(tabela_shap, ranking_enet) {
+   tabela_shap %>%
+-    dplyr::rename(
+-      Variavel = Variavel,
++    dplyr::select(
++      Variavel,
+       Posicao_SHAP = Posicao,
+-      Importancia_SHAP = Importancia_SHAP
++      Importancia_SHAP
+     ) %>%
+     dplyr::full_join(
+       ranking_enet %>%
+diff --git a/R/funcoes_modelos.R b/R/funcoes_modelos.R
+index 167c16d..1a43bcf 100644
+--- a/R/funcoes_modelos.R
++++ b/R/funcoes_modelos.R
+@@ -6,11 +6,93 @@
+ source("R/funcoes_metricas.R")
+ source("R/funcoes_preprocessamento.R")
+ 
++obter_parametros_cv_fase <- function(fase = c("confirmacao", "exploratorio")) {
++  fase <- match.arg(fase)
++
++  switch(
++    fase,
++    exploratorio = list(
++      fase = fase,
++      number = CV_FOLDS_EXPLORATORIO,
++      repeats = CV_REPEATS_EXPLORATORIO
++    ),
++    confirmacao = list(
++      fase = fase,
++      number = CV_FOLDS_CONFIRMACAO,
++      repeats = CV_REPEATS_CONFIRMACAO
++    )
++  )
++}
++
++criar_folds_estratificados <- function(
++  y,
++  fase = c("confirmacao", "exploratorio"),
++  number = NULL,
++  repeats = NULL,
++  seed = SEED_PROJETO
++) {
++  fase <- match.arg(fase)
++  y <- factor(y)
++
++  params_fase <- obter_parametros_cv_fase(fase)
++
++  if (is.null(number)) {
++    number <- params_fase$number
++  }
++
++  if (is.null(repeats)) {
++    repeats <- params_fase$repeats
++  }
++
++  index <- list()
++  index_out <- list()
++  indices_totais <- seq_along(y)
++
++  for (rep_idx in seq_len(repeats)) {
++    set.seed(seed + rep_idx - 1L)
++    folds_rep <- caret::createFolds(y, k = number, returnTrain = FALSE)
++
++    for (fold_idx in seq_along(folds_rep)) {
++      nome_fold <- paste0("Rep", rep_idx, ".Fold", fold_idx)
++      idx_valid <- sort(unique(folds_rep[[fold_idx]]))
++
++      index_out[[nome_fold]] <- idx_valid
++      index[[nome_fold]] <- indices_totais[!indices_totais %in% idx_valid]
++    }
++  }
++
++  list(
++    fase = fase,
++    number = number,
++    repeats = repeats,
++    index = index,
++    index_out = index_out
++  )
++}
++
++normalizar_folds_validacao <- function(folds_cv) {
++  if (is.null(folds_cv)) {
++    return(NULL)
++  }
++
++  if (is.list(folds_cv) && "index_out" %in% names(folds_cv)) {
++    return(folds_cv$index_out)
++  }
++
++  folds_cv
++}
++
+ controle_cv_padrao <- function(
+   number = CV_FOLDS_PADRAO,
+   repeats = CV_REPEATS_PADRAO,
+-  save_predictions = FALSE
++  save_predictions = FALSE,
++  folds_cv = NULL
+ ) {
++  if (!is.null(folds_cv)) {
++    number <- folds_cv$number
++    repeats <- folds_cv$repeats
++  }
++
+   args <- list(
+     method = if (repeats > 1) "repeatedcv" else "cv",
+     number = number,
+@@ -24,6 +106,11 @@ controle_cv_padrao <- function(
+     args$repeats <- repeats
+   }
+ 
++  if (!is.null(folds_cv)) {
++    args$index <- folds_cv$index
++    args$indexOut <- folds_cv$index_out
++  }
++
+   do.call(caret::trainControl, args)
+ }
+ 
+@@ -103,6 +190,21 @@ grid_avnnet_padrao <- function() {
+   )
+ }
+ 
++grid_nnet_exploratorio <- function() {
++  expand.grid(
++    size = NNET_SIZE_EXPLORATORIO,
++    decay = NNET_DECAY_EXPLORATORIO
++  )
++}
++
++grid_avnnet_exploratorio <- function() {
++  expand.grid(
++    size = AVNNET_SIZE_EXPLORATORIO,
++    decay = AVNNET_DECAY_EXPLORATORIO,
++    bag = FALSE
++  )
++}
++
+ obter_especificacao_modelo <- function(modelo) {
+   switch(
+     modelo,
+@@ -159,36 +261,257 @@ obter_grid_modelo_padrao <- function(modelo, dados_sub) {
+   )
+ }
+ 
++obter_grid_modelo_fase <- function(modelo, dados_sub, fase = c("confirmacao", "exploratorio")) {
++  fase <- match.arg(fase)
++
++  if (fase == "confirmacao") {
++    return(obter_grid_modelo_padrao(modelo = modelo, dados_sub = dados_sub))
++  }
++
++  switch(
++    modelo,
++    GLM = NULL,
++    RF = obter_grid_modelo_padrao(modelo = modelo, dados_sub = dados_sub),
++    SVM_Radial = grid_svm_padrao(
++      dados_sub = dados_sub,
++      c_values = SVM_C_EXPLORATORIO
++    ),
++    NNET = grid_nnet_exploratorio(),
++    avNNet = grid_avnnet_exploratorio(),
++    XGBoost = grid_xgb_padrao(),
++    stop(sprintf("Sem grid exploratorio para o modelo: %s", modelo))
++  )
++}
++
++validar_campos_config_modelo <- function(config_modelo, modelo, colunas_obrigatorias) {
++  colunas_faltantes <- setdiff(colunas_obrigatorias, names(config_modelo))
++
++  if (length(colunas_faltantes) > 0) {
++    stop(
++      sprintf(
++        "Configuracao inconsistente para %s: coluna(s) ausente(s): %s",
++        modelo,
++        paste(colunas_faltantes, collapse = ", ")
++      ),
++      call. = FALSE
++    )
++  }
++
++  valores_linha <- config_modelo[1, colunas_obrigatorias, drop = FALSE]
++  colunas_na <- names(valores_linha)[vapply(valores_linha, function(x) any(is.na(x)), logical(1))]
++
++  if (length(colunas_na) > 0) {
++    stop(
++      sprintf(
++        "Configuracao inconsistente para %s: coluna(s) com NA: %s",
++        modelo,
++        paste(colunas_na, collapse = ", ")
++      ),
++      call. = FALSE
++    )
++  }
++}
++
+ obter_grid_modelo_config <- function(config_modelo) {
++  config_modelo <- tibble::as_tibble(config_modelo)
++
++  if (nrow(config_modelo) == 0) {
++    stop("Configuracao do modelo vazia.", call. = FALSE)
++  }
++
++  if (!"Modelo" %in% names(config_modelo) || is.na(config_modelo$Modelo[1])) {
++    stop("Configuracao inconsistente: coluna Modelo ausente ou com NA.", call. = FALSE)
++  }
++
+   modelo <- as.character(config_modelo$Modelo[1])
+ 
+   switch(
+     modelo,
+     GLM = NULL,
+-    RF = data.frame(mtry = as.integer(config_modelo$mtry[1])),
+-    SVM_Radial = data.frame(
+-      sigma = as.numeric(config_modelo$sigma[1]),
+-      C = as.numeric(config_modelo$C[1])
+-    ),
+-    NNET = data.frame(
+-      size = as.integer(config_modelo$size[1]),
+-      decay = as.numeric(config_modelo$decay[1])
+-    ),
+-    avNNet = data.frame(
+-      size = as.integer(config_modelo$size[1]),
+-      decay = as.numeric(config_modelo$decay[1]),
+-      bag = as.logical(config_modelo$bag[1])
+-    ),
+-    XGBoost = data.frame(
+-      nrounds = as.integer(config_modelo$nrounds[1]),
+-      max_depth = as.integer(config_modelo$max_depth[1]),
+-      eta = as.numeric(config_modelo$eta[1]),
+-      gamma = as.numeric(config_modelo$gamma[1]),
+-      colsample_bytree = as.numeric(config_modelo$colsample_bytree[1]),
+-      min_child_weight = as.numeric(config_modelo$min_child_weight[1]),
+-      subsample = as.numeric(config_modelo$subsample[1])
+-    ),
+-    stop(sprintf("Sem grid para config do modelo: %s", modelo))
++    RF = {
++      validar_campos_config_modelo(config_modelo, modelo, c("mtry"))
++      data.frame(mtry = as.integer(config_modelo$mtry[1]))
++    },
++    SVM_Radial = {
++      validar_campos_config_modelo(config_modelo, modelo, c("sigma", "C"))
++      data.frame(
++        sigma = as.numeric(config_modelo$sigma[1]),
++        C = as.numeric(config_modelo$C[1])
++      )
++    },
++    NNET = {
++      validar_campos_config_modelo(config_modelo, modelo, c("size", "decay"))
++      data.frame(
++        size = as.integer(config_modelo$size[1]),
++        decay = as.numeric(config_modelo$decay[1])
++      )
++    },
++    avNNet = {
++      validar_campos_config_modelo(config_modelo, modelo, c("size", "decay", "bag"))
++      data.frame(
++        size = as.integer(config_modelo$size[1]),
++        decay = as.numeric(config_modelo$decay[1]),
++        bag = as.logical(config_modelo$bag[1])
++      )
++    },
++    XGBoost = {
++      validar_campos_config_modelo(
++        config_modelo,
++        modelo,
++        c(
++          "nrounds", "max_depth", "eta", "gamma",
++          "colsample_bytree", "min_child_weight", "subsample"
++        )
++      )
++
++      data.frame(
++        nrounds = as.integer(config_modelo$nrounds[1]),
++        max_depth = as.integer(config_modelo$max_depth[1]),
++        eta = as.numeric(config_modelo$eta[1]),
++        gamma = as.numeric(config_modelo$gamma[1]),
++        colsample_bytree = as.numeric(config_modelo$colsample_bytree[1]),
++        min_child_weight = as.numeric(config_modelo$min_child_weight[1]),
++        subsample = as.numeric(config_modelo$subsample[1])
++      )
++    },
++    stop(sprintf("Sem grid para config do modelo: %s", modelo), call. = FALSE)
++  )
++}
++
++ordenar_resultados_modelagem <- function(tabela) {
++  colunas_ordem <- intersect(c("ROC", "PRAUC", "F1", "GMean", "Sens", "Spec"), names(tabela))
++
++  if (length(colunas_ordem) == 0) {
++    return(tabela)
++  }
++
++  exprs_ordem <- lapply(colunas_ordem, function(coluna) {
++    rlang::expr(dplyr::desc(.data[[!!coluna]]))
++  })
++
++  dplyr::arrange(tabela, !!!exprs_ordem)
++}
++
++adicionar_contexto_validacao <- function(tabela, fase, folds_cv = NULL) {
++  if (is.null(folds_cv)) {
++    folds_cv <- obter_parametros_cv_fase(fase)
++  }
++
++  tabela %>%
++    dplyr::mutate(
++      Fase_Protocolo = fase,
++      CV_Folds = folds_cv$number,
++      CV_Repeats = folds_cv$repeats
++    )
++}
++
++selecionar_finalistas_modelagem <- function(
++  tabela,
++  n_por_modelo = N_FINALISTAS_CONFIRMACAO_SEM_BALANCEAMENTO,
++  agrupadores = "Modelo"
++) {
++  tabela %>%
++    dplyr::group_by(dplyr::across(dplyr::all_of(agrupadores))) %>%
++    dplyr::group_modify(~ {
++      tabela_ordenada <- ordenar_resultados_modelagem(.x)
++      dplyr::slice_head(tabela_ordenada, n = min(n_por_modelo, nrow(tabela_ordenada)))
++    }) %>%
++    dplyr::ungroup()
++}
++
++selecionar_melhor_cenario_por_modelo <- function(tabela, agrupadores = "Modelo") {
++  selecionar_finalistas_modelagem(
++    tabela = tabela,
++    n_por_modelo = 1,
++    agrupadores = agrupadores
++  )
++}
++
++carregar_curva_topn <- function(caminhos) {
++  caminhos_existentes <- caminhos[file.exists(caminhos)]
++
++  if (length(caminhos_existentes) == 0) {
++    return(NULL)
++  }
++
++  readRDS(caminhos_existentes[1])
++}
++
++obter_melhor_topn_curva <- function(curva_topn) {
++  if (is.null(curva_topn)) {
++    return(NA_integer_)
++  }
++
++  curva_topn <- tibble::as_tibble(curva_topn)
++
++  if (!"TopN" %in% names(curva_topn) || nrow(curva_topn) == 0) {
++    return(NA_integer_)
++  }
++
++  as.integer(ordenar_resultados_modelagem(curva_topn)$TopN[1])
++}
++
++obter_topn_candidatos <- function(
++  ordem_variaveis,
++  fallback_topn = TOPN_CANDIDATOS_FALLBACK,
++  vizinhanca = TOPN_VIZINHANCA_CANDIDATA,
++  usar_guias = TRUE
++) {
++  n_total <- length(ordem_variaveis)
++  fallback_validos <- sort(unique(fallback_topn[fallback_topn >= 1 & fallback_topn <= n_total]))
++
++  if (usar_guias) {
++    melhor_glm <- obter_melhor_topn_curva(carregar_curva_topn(c(
++      "objetos/melhor_topn_glm.rds",
++      "objetos/curva_topn_glm.rds"
++    )))
++
++    melhor_xgb <- obter_melhor_topn_curva(carregar_curva_topn(c(
++      "objetos/melhor_topn_xgboost.rds",
++      "objetos/curva_topn_xgboost.rds"
++    )))
++
++    if (all(is.finite(c(melhor_glm, melhor_xgb)))) {
++      offsets <- seq.int(-vizinhanca, vizinhanca)
++      topn_candidatos <- sort(unique(c(melhor_glm + offsets, melhor_xgb + offsets)))
++      topn_candidatos <- topn_candidatos[topn_candidatos >= 1 & topn_candidatos <= n_total]
++
++      return(tibble::tibble(
++        TopN = as.integer(topn_candidatos),
++        Origem = "Guiado_por_GLM_XGBoost",
++        MelhorTopN_GLM = as.integer(melhor_glm),
++        MelhorTopN_XGBoost = as.integer(melhor_xgb)
++      ))
++    }
++  }
++
++  tibble::tibble(
++    TopN = as.integer(fallback_validos),
++    Origem = "Fallback_Fixo",
++    MelhorTopN_GLM = NA_integer_,
++    MelhorTopN_XGBoost = NA_integer_
++  )
++}
++
++obter_subconjuntos_candidatos <- function(
++  ordem_variaveis,
++  topn_candidatos = NULL,
++  fallback_topn = TOPN_CANDIDATOS_FALLBACK,
++  vizinhanca = TOPN_VIZINHANCA_CANDIDATA,
++  usar_guias = TRUE
++) {
++  if (is.null(topn_candidatos)) {
++    topn_candidatos <- obter_topn_candidatos(
++      ordem_variaveis = ordem_variaveis,
++      fallback_topn = fallback_topn,
++      vizinhanca = vizinhanca,
++      usar_guias = usar_guias
++    )$TopN
++  }
++
++  stats::setNames(
++    lapply(topn_candidatos, function(k) ordem_variaveis[seq_len(k)]),
++    paste0("Top", topn_candidatos)
+   )
+ }
+ 
+@@ -198,15 +521,34 @@ treinar_modelo_caret <- function(
+   dados_sub,
+   tune_grid = NULL,
+   usar_smotenc = FALSE,
+-  cv_number = CV_FOLDS_PADRAO,
+-  cv_repeats = CV_REPEATS_PADRAO,
+-  save_predictions = FALSE
++  cv_number = NULL,
++  cv_repeats = NULL,
++  save_predictions = FALSE,
++  fase_validacao = c("confirmacao", "exploratorio"),
++  folds_cv = NULL
+ ) {
++  fase_validacao <- match.arg(fase_validacao)
+   dados_sub <- garantir_ordem_classe(dados_sub)
+   spec <- obter_especificacao_modelo(modelo)
+ 
+   if (is.null(tune_grid)) {
+-    tune_grid <- obter_grid_modelo_padrao(modelo = modelo, dados_sub = dados_sub)
++    tune_grid <- obter_grid_modelo_fase(
++      modelo = modelo,
++      dados_sub = dados_sub,
++      fase = fase_validacao
++    )
++  }
++
++  if (is.null(folds_cv)) {
++    params_fase <- obter_parametros_cv_fase(fase_validacao)
++
++    if (is.null(cv_number)) {
++      cv_number <- params_fase$number
++    }
++
++    if (is.null(cv_repeats)) {
++      cv_repeats <- params_fase$repeats
++    }
+   }
+ 
+   objeto_treino <- if (usar_smotenc) {
+@@ -224,7 +566,8 @@ treinar_modelo_caret <- function(
+       trControl = controle_cv_padrao(
+         number = cv_number,
+         repeats = cv_repeats,
+-        save_predictions = save_predictions
++        save_predictions = save_predictions,
++        folds_cv = folds_cv
+       )
+     ),
+     spec$train_args
+@@ -258,6 +601,17 @@ extrair_melhor_resultado_caret <- function(modelo, metadata = list()) {
+   res
+ }
+ 
++extrair_melhor_resultado_xgb <- function(tabela_xgb, metadata = list()) {
++  res <- ordenar_resultados_modelagem(tabela_xgb) %>%
++    dplyr::slice(1)
++
++  for (nome in names(metadata)) {
++    res[[nome]] <- metadata[[nome]]
++  }
++
++  res
++}
++
+ extrair_predicoes_oof_caret <- function(modelo) {
+   pred <- tibble::as_tibble(modelo$pred)
+ 
+@@ -282,12 +636,21 @@ extrair_predicoes_oof_caret <- function(modelo) {
+ }
+ 
+ avaliar_xgb_cv <- function(dados, folds, grid_xgb, aplicar_smotenc = FALSE, formula_modelo = NULL) {
++  folds_validacao <- normalizar_folds_validacao(folds)
++
++  if (is.null(folds_validacao)) {
++    folds_validacao <- criar_folds_estratificados(
++      y = dados$Class,
++      fase = "confirmacao"
++    )$index_out
++  }
++
+   resultados <- vector("list", nrow(grid_xgb))
+ 
+   for (i in seq_len(nrow(grid_xgb))) {
+     params_grid <- grid_xgb[i, , drop = FALSE]
+ 
+-    metricas_folds <- lapply(folds, function(idx_valid) {
++    metricas_folds <- lapply(folds_validacao, function(idx_valid) {
+       treino_fold <- dados[-idx_valid, , drop = FALSE]
+       valid_fold <- dados[idx_valid, , drop = FALSE]
+ 
+@@ -334,7 +697,7 @@ avaliar_xgb_cv <- function(dados, folds, grid_xgb, aplicar_smotenc = FALSE, form
+       prob_valid <- predict(modelo_xgb, newdata = x_valid)
+ 
+       calcular_metricas_prob(
+-        obs = valid_fold$Class,
++        obs = valid_proc$Class,
+         prob_deve = prob_valid,
+         threshold = 0.50
+       )
+@@ -364,15 +727,25 @@ avaliar_xgb_cv <- function(dados, folds, grid_xgb, aplicar_smotenc = FALSE, form
+ }
+ 
+ avaliar_xgb_oof <- function(dados, folds, grid_xgb, aplicar_smotenc = FALSE, formula_modelo = NULL) {
++  folds_validacao <- normalizar_folds_validacao(folds)
++
++  if (is.null(folds_validacao)) {
++    folds_validacao <- criar_folds_estratificados(
++      y = dados$Class,
++      fase = "confirmacao"
++    )$index_out
++  }
++
+   resultados_grid <- vector("list", nrow(grid_xgb))
+   predicoes_grid <- vector("list", nrow(grid_xgb))
+ 
+   for (i in seq_len(nrow(grid_xgb))) {
+     params_grid <- grid_xgb[i, , drop = FALSE]
+-    prob_oof <- rep(NA_real_, nrow(dados))
++    prob_oof_soma <- rep(0, nrow(dados))
++    prob_oof_contagem <- rep(0L, nrow(dados))
+ 
+-    for (j in seq_along(folds)) {
+-      idx_valid <- folds[[j]]
++    for (j in seq_along(folds_validacao)) {
++      idx_valid <- folds_validacao[[j]]
+       treino_fold <- dados[-idx_valid, , drop = FALSE]
+       valid_fold <- dados[idx_valid, , drop = FALSE]
+ 
+@@ -416,9 +789,13 @@ avaliar_xgb_oof <- function(dados, folds, grid_xgb, aplicar_smotenc = FALSE, for
+         verbose = 0
+       )
+ 
+-      prob_oof[idx_valid] <- predict(modelo_xgb, newdata = x_valid)
++      prob_predita <- predict(modelo_xgb, newdata = x_valid)
++      prob_oof_soma[idx_valid] <- prob_oof_soma[idx_valid] + prob_predita
++      prob_oof_contagem[idx_valid] <- prob_oof_contagem[idx_valid] + 1L
+     }
+ 
++    prob_oof <- ifelse(prob_oof_contagem > 0, prob_oof_soma / prob_oof_contagem, NA_real_)
++
+     metricas_oof <- calcular_metricas_prob(
+       obs = dados$Class,
+       prob_deve = prob_oof,
+@@ -439,7 +816,7 @@ avaliar_xgb_oof <- function(dados, folds, grid_xgb, aplicar_smotenc = FALSE, for
+   }
+ 
+   tabela_resultados <- dplyr::bind_rows(resultados_grid) %>%
+-    dplyr::arrange(desc(ROC), desc(F1), desc(GMean))
++    ordenar_resultados_modelagem()
+ 
+   melhor_id <- tabela_resultados$GridID[1]
+ 
+
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..673e6d0
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,259 @@
++# Credit Default Prediction in R
++
++## Visao geral
++
++Este repositorio implementa um pipeline completo de credit scoring em R para prever inadimplencia em cartao de credito. O objetivo nao e apenas maximizar uma metrica estatistica isolada, mas construir um processo reproduzivel, comparavel entre modelos e metodologicamente defensavel para selecao de variaveis, calibracao de threshold, avaliacao final em teste e interpretabilidade.
++
++O desenho atual segue um protocolo em duas camadas:
++
++- Fase exploratoria: mais barata, usada para filtrar cenarios promissores sem enfraquecer a comparacao.
++- Fase de confirmacao: mais rigorosa, aplicada apenas aos finalistas que sobreviveram a exploracao.
++
++Essa divisao reduz custo computacional pela diminuicao inteligente de cenarios, e nao por usar menos rigor na etapa decisiva.
++
++## Problema de negocio
++
++O problema central e identificar clientes com maior risco de default antes da concessao ou renovacao de credito. Em pratica:
++
++- Falso negativo: o modelo classifica um inadimplente como bom pagador.
++- Falso positivo: o modelo barra um bom pagador por excesso de cautela.
++
++Em credito, falso negativo costuma ser o erro mais caro, porque implica exposicao real a perda. Por isso a analise final destaca sensibilidade, sem abandonar ROC, PRAUC, F1, especificidade e metricas de negocio.
++
++## Dataset e variavel alvo
++
++- Fonte de dados local: `dados/default_of_credit_card_clients.xls`
++- Base limpa derivada: `dados/dados_limpos.csv`
++- Variavel alvo no pipeline: `Class`
++- Convencao da classe positiva: `Deve`
++- Convencao da classe negativa: `Pago`
++
++O script `01_dados.R` renomeia as colunas, remove `ID` e recodifica a resposta para a ordem `Deve`, `Pago`, o que padroniza a classe positiva em todo o pipeline.
++
++## Estrategia metodologica
++
++### Fase exploratoria
++
++A fase exploratoria usa validacao cruzada estratificada mais barata:
++
++- `CV_FOLDS_EXPLORATORIO <- 5`
++- `CV_REPEATS_EXPLORATORIO <- 1`
++
++Objetivo:
++
++- mapear saturacao de variaveis em GLM e XGBoost;
++- reduzir o espaco de busca para RF, SVM radial, NNET e avNNet;
++- selecionar subconjuntos e configuracoes candidatas para confirmacao.
++
++Politica por modelo:
++
++- GLM e XGBoost continuam como guias principais da exploracao Top-N completa.
++- RF, SVM radial, NNET e avNNet nao rodam Top-1 ate Top-N inteiro por padrao.
++- Esses modelos passam a usar apenas `TopN` candidatos guiados por evidencia.
++
++Como os `TopN` candidatos sao escolhidos:
++
++1. Ler os melhores `TopN` ja encontrados por GLM e XGBoost, se os arquivos de curva existirem.
++2. Formar a uniao de:
++   `melhor TopN do GLM`, `melhor TopN do XGBoost`, e vizinhos `-2`, `-1`, `+1`, `+2`.
++3. Manter apenas valores validos e unicos.
++4. Se os arquivos ainda nao existirem, usar fallback explicito `c(10, 13, 14)`.
++
++Essa regra reduz custo de RF/SVM/redes sem perder o papel analitico de GLM e XGBoost como detectores de saturacao.
++
++Grids exploratorios padrao:
++
++- `SVM_Radial`: 3 valores de `sigma` e `C = c(0.5, 1, 2)`
++- `NNET`: `size = c(3, 5)` e `decay = c(0.001, 0.01)`
++- `avNNet`: mesma grade enxuta da `NNET`
++- `RF`: grade pequena baseada em `mtry`
++- `XGBoost`: grade controlada, sem early stopping
++
++### Fase de confirmacao
++
++A confirmacao usa validacao cruzada estratificada mais rigorosa:
++
++- `CV_FOLDS_CONFIRMACAO <- 5`
++- `CV_REPEATS_CONFIRMACAO <- 2`
++
++Objetivo:
++
++- reavaliar apenas os finalistas sem balanceamento;
++- testar `SMOTENC` apenas nos melhores subconjuntos confirmados;
++- levar para calibracao de threshold apenas um cenario final confirmado por modelo.
++
++Na confirmacao:
++
++- os mesmos folds sao reutilizados entre modelos sempre que o conjunto de treino e o mesmo;
++- modelos caret e XGBoost customizado passam a usar a mesma logica de validacao;
++- `SMOTENC` continua restrito ao treino de cada fold ou ao treino final, nunca ao conjunto de teste.
++
++## Como evitar data leakage
++
++O pipeline foi estruturado para evitar vazamento de informacao em pontos criticos:
++
++- O conjunto de teste final fica totalmente intocado ate `08_avaliacao_teste.R`.
++- Threshold e calibrado em `07_threshold_calibracao.R` usando predicoes OOF do treino, nunca o teste.
++- `SMOTENC` e aplicado apenas dentro do treino de cada fold ou no treino final.
++- Na validacao com XGBoost customizado, as transformacoes sao ajustadas no treino do fold e aplicadas no fold de validacao sem reusar informacao futura.
++- A comparacao entre modelos usa os mesmos folds estratificados por fase sempre que os modelos enxergam o mesmo conjunto de treino.
++
++## Sensibilidade e especificidade
++
++- Sensibilidade: proporcao de inadimplentes reais (`Deve`) corretamente identificados pelo modelo.
++- Especificidade: proporcao de bons pagadores (`Pago`) corretamente preservados pelo modelo.
++
++Leitura pratica:
++
++- alta sensibilidade reduz falso negativo;
++- alta especificidade reduz falso positivo.
++
++Em credito, a sensibilidade recebe prioridade analitica porque deixar passar um inadimplente costuma gerar perda financeira mais grave do que rejeitar indevidamente um bom pagador. Ainda assim, a decisao final continua acompanhando ROC, PRAUC, F1, GMean, acuracia e metricas de negocio.
++
++## Pipeline completo
++
++### 1. Preparacao e selecao de variaveis
++
++1. `00_setup.R`
++   Carrega pacotes, cria pastas e define seeds, splits, grids e parametros de validacao.
++2. `01_dados.R`
++   Le a base bruta, limpa colunas e define a resposta `Class`.
++3. `02_preprocessamento.R`
++   Ajusta categorias, tipos e salva splits estratificados 70/30 e 80/20.
++4. `03_selecao_variaveis.R`
++   Gera o ranking inicial de variaveis com Elastic Net no treino.
++
++### 2. Exploracao Top-N
++
++5. `04_topn_base.R`
++   Curva Top-N completa para GLM em fase exploratoria.
++6. `04B_topn_xgboost.R`
++   Curva Top-N completa para XGBoost em fase exploratoria.
++7. `04C_topn_modelos_caret.R`
++   Curvas Top-N candidatas para RF, SVM radial, NNET e avNNet.
++
++### 3. Benchmark sem balanceamento
++
++8. `05A_glm_rf_subconjuntos.R`
++   Exploracao e confirmacao sem balanceamento para GLM e RF.
++9. `05B_xgboost_subconjuntos.R`
++   Exploracao e confirmacao sem balanceamento para XGBoost.
++10. `05C_svm_subconjuntos.R`
++    Exploracao e confirmacao sem balanceamento para SVM radial.
++11. `05D_redes_neurais_subconjuntos.R`
++    Exploracao e confirmacao sem balanceamento para NNET e avNNet.
++
++### 4. Confirmacao com SMOTENC
++
++12. `06_rf_balanceamento_smotenc.R`
++    Compara RF com e sem `SMOTENC` no melhor subconjunto confirmado do modelo.
++13. `06B_xgb_balanceamento_smotenc.R`
++    Compara XGBoost com e sem `SMOTENC` no melhor subconjunto confirmado.
++14. `06C_modelos_caret_balanceamento_smotenc.R`
++    Compara SVM radial, NNET e avNNet com e sem `SMOTENC` nos respectivos finalistas.
++
++### 5. Calibracao, teste e interpretabilidade
++
++15. `07_threshold_calibracao.R`
++    Calibra threshold apenas nos finalistas confirmados usando predicoes OOF.
++16. `08_avaliacao_teste.R`
++    Treina os finalistas no treino completo e avalia no teste intocado.
++17. `09_shap.R`
++    Gera interpretabilidade SHAP para o modelo vencedor e compara com o ranking Elastic Net.
++18. `10_resumo_final.R`
++    Consolida benchmark, teste, negocio e interpretabilidade.
++
++## Ordem sugerida de execucao
++
++Ordem recomendada em uma rodada completa:
++
++1. `00_setup.R`
++2. `01_dados.R`
++3. `02_preprocessamento.R`
++4. `03_selecao_variaveis.R`
++5. `04_topn_base.R`
++6. `04B_topn_xgboost.R`
++7. `04C_topn_modelos_caret.R`
++8. `05A_glm_rf_subconjuntos.R`
++9. `05B_xgboost_subconjuntos.R`
++10. `05C_svm_subconjuntos.R`
++11. `05D_redes_neurais_subconjuntos.R`
++12. `06_rf_balanceamento_smotenc.R`
++13. `06B_xgb_balanceamento_smotenc.R`
++14. `06C_modelos_caret_balanceamento_smotenc.R`
++15. `07_threshold_calibracao.R`
++16. `08_avaliacao_teste.R`
++17. `09_shap.R`
++18. `10_resumo_final.R`
++
++## Splits de treino e teste
++
++- Split padrao do projeto: `SPLIT_TREINO_PADRAO <- 0.70`
++- Split alternativo salvo para analise de robustez: `0.80`
++
++O split 70/30 permanece como padrao operacional do pipeline. O split 80/20 e mantido como opcao de robustez, sem substituir o fluxo principal.
++
++## Outputs gerados
++
++### `objetos/`
++
++Armazena artefatos `RDS` usados entre scripts:
++
++- bases limpas e preprocessadas;
++- splits de treino e teste;
++- curvas Top-N;
++- tabelas de benchmark exploratorio e confirmado;
++- configuracoes finais;
++- resultados de threshold;
++- tabelas finais de teste;
++- objetos auxiliares de interpretabilidade.
++
++### `resultados/`
++
++Armazena tabelas `CSV` para consumo analitico e auditoria:
++
++- rankings de variaveis;
++- curvas e tabelas Top-N;
++- benchmarks sem balanceamento;
++- comparacoes com `SMOTENC`;
++- thresholds calibrados;
++- resultados finais de teste;
++- tabelas SHAP e comparacao com Elastic Net.
++
++### `figuras/`
++
++Armazena graficos exportados:
++
++- curvas ROC;
++- comparacoes por subconjunto e modelo;
++- comparacoes de threshold;
++- desempenho final em teste;
++- visualizacoes SHAP.
++
++## Nota metodologica sobre SMOTENC
++
++`SMOTENC` foi mantido porque a base mistura variaveis numericas e categoricas. A implementacao usa `recipes` e `themis::step_smotenc()` com `skip = TRUE`, de modo que:
++
++- o rebalanceamento acontece apenas no treino de cada fold;
++- o fold de validacao permanece na distribuicao original;
++- o conjunto de teste final nao recebe oversampling.
++
++Esse detalhe e essencial para manter uma estimativa honesta de desempenho.
++
++## Nota metodologica sobre interpretabilidade com SHAP
++
++O script `09_shap.R` interpreta apenas o modelo vencedor apos a avaliacao final em teste. A comparacao SHAP vs Elastic Net tem papeis distintos:
++
++- Elastic Net fornece um ranking inicial linear para triagem de variaveis;
++- SHAP explica a distribuicao de contribuicoes no modelo final, inclusive nao linearidades e interacoes.
++
++Por isso divergencias entre o ranking SHAP e o ranking do Elastic Net sao esperadas e fazem parte da leitura analitica, nao de um erro do pipeline.
++
++## Resumo do protocolo atual
++
++- GLM e XGBoost exploram Top-N completo e guiam a reducao de cenarios.
++- RF, SVM radial, NNET e avNNet usam TopN candidatos por padrao.
++- A comparacao entre modelos reutiliza folds compartilhados por fase.
++- A confirmacao forte fica concentrada apenas nos finalistas.
++- Threshold e calibrado em OOF, nao no teste.
++- O teste final permanece intocado ate a etapa final.
+
