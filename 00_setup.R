@@ -1,6 +1,6 @@
 # ==============================================================================
 # 00_setup.R
-# Responsabilidade: instalar/carregar pacotes e definir configurações iniciais.
+# Responsabilidade: instalar/carregar pacotes e definir configuracoes iniciais.
 # ==============================================================================
 
 options(repos = c(CRAN = "https://cran.rstudio.com"))
@@ -35,12 +35,31 @@ pacman::p_load(
   shapviz
 )
 
-pastas <- c("dados", "resultados", "figuras", "objetos")
+PASTAS_PROJETO <- c(
+  "dados",
+  "resultados",
+  "figuras",
+  "objetos",
+  "objetos/splits",
+  "R",
+  "docs"
+)
 
-for (pasta in pastas) {
-  if (!dir.exists(pasta)) dir.create(pasta)
+for (pasta in PASTAS_PROJETO) {
+  if (!dir.exists(pasta)) dir.create(pasta, recursive = TRUE)
 }
 
-set.seed(123)
+SEED_PROJETO <- 123
+SPLITS_TREINO_DISPONIVEIS <- c(0.70, 0.80)
+SPLIT_TREINO_PADRAO <- 0.70
+CV_FOLDS_PADRAO <- 5
+CV_REPEATS_PADRAO <- 2
+SMOTENC_OVER_RATIO <- 1
+SMOTENC_NEIGHBORS <- 5
+CUSTO_FALSO_NEGATIVO <- 5000
+CUSTO_FALSO_POSITIVO <- 1000
+BENEFICIO_VERDADEIRO_POSITIVO <- 5000
 
-message("Setup concluído com sucesso.")
+set.seed(SEED_PROJETO)
+
+message("00_setup.R carregado com sucesso.")

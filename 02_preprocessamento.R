@@ -1,61 +1,53 @@
 # ==============================================================================
 # 02_preprocessamento.R
-# Responsabilidade: tratar categorias, ajustar tipos das variáveis
-# e criar treino/teste sem vazamento.
+# Responsabilidade: tratar categorias, ajustar tipos e salvar splits 70/30 e
+# 80/20 para manter o projeto reproduzivel.
 # ==============================================================================
 
 source("00_setup.R")
+source("R/funcoes_preprocessamento.R")
 
 # ------------------------------------------------------------------------------
-# BLOCO 1 — Carregar base limpa
+# BLOCO 1 - Carregar base limpa
 # ------------------------------------------------------------------------------
 dados <- readRDS("objetos/dados_limpos.rds")
 
 # ------------------------------------------------------------------------------
-# BLOCO 2 — Tratar categorias problemáticas
+# BLOCO 2 - Tratar categorias problematicas
 # ------------------------------------------------------------------------------
-# EDUCATION:
-# 1 = graduate school
-# 2 = university
-# 3 = high school
-# 4 = others
-# 0, 5 e 6 aparecem na base mas por ser pouco será agrupado como "4"
-
 dados <- dados %>%
-  mutate(
-    EDUCATION = case_when(
+  dplyr::mutate(
+    EDUCATION = dplyr::case_when(
       EDUCATION %in% c(0, 5, 6) ~ 4,
       TRUE ~ EDUCATION
     ),
-    
-    MARRIAGE = case_when(
+    MARRIAGE = dplyr::case_when(
       MARRIAGE == 0 ~ 3,
       TRUE ~ MARRIAGE
     )
   )
 
 # ------------------------------------------------------------------------------
-# BLOCO 3 — Transformar variáveis categóricas em factor
+# BLOCO 3 - Ajustar tipos
 # ------------------------------------------------------------------------------
 dados <- dados %>%
-  mutate(
+  dplyr::mutate(
     SEX = factor(SEX, levels = c(1, 2), labels = c("Masculino", "Feminino")),
-    
     EDUCATION = factor(
       EDUCATION,
       levels = c(1, 2, 3, 4),
       labels = c("PosGraduacao", "Universidade", "EnsinoMedio", "Outros")
     ),
-    
     MARRIAGE = factor(
       MARRIAGE,
       levels = c(1, 2, 3),
       labels = c("Casado", "Solteiro", "Outros")
     )
-  )
+  ) %>%
+  garantir_ordem_classe()
 
 # ------------------------------------------------------------------------------
-# BLOCO 4 — Conferência após tratamento
+# BLOCO 4 - Conferencia rapida
 # ------------------------------------------------------------------------------
 print(table(dados$SEX))
 print(table(dados$EDUCATION))
@@ -63,35 +55,38 @@ print(table(dados$MARRIAGE))
 print(str(dados))
 
 # ------------------------------------------------------------------------------
-# BLOCO 5 — Split treino/teste estratificado
+# BLOCO 5 - Gerar splits estratificados
 # ------------------------------------------------------------------------------
-# p = 0.80 -> 80% treino, 20% teste
-# list = FALSE -> devolve índices em vez de lista
+# O projeto passa a salvar explicitamente os cenarios 70/30 e 80/20.
+# O split canonico usado pelos demais scripts fica configurado em
+# SPLIT_TREINO_PADRAO, definido em 00_setup.R.
+splits <- criar_splits_estratificados(
+  dados = dados,
+  proporcoes = SPLITS_TREINO_DISPONIVEIS,
+  resposta = "Class",
+  seed = SEED_PROJETO
+)
 
-set.seed(123)
-
-idx_treino <- caret::createDataPartition(dados$Class, p = 0.80, list = FALSE)
-
-treino <- dados[idx_treino, ]
-teste  <- dados[-idx_treino, ]
+salvar_splits_estratificados(
+  splits = splits,
+  dados = dados,
+  proporcao_padrao = SPLIT_TREINO_PADRAO
+)
 
 # ------------------------------------------------------------------------------
-# BLOCO 6 — Conferir proporção das classes
+# BLOCO 6 - Conferir proporcoes das classes
 # ------------------------------------------------------------------------------
-cat("Proporção da classe no conjunto completo:\n")
+cat("Proporcao da classe no conjunto completo:\n")
 print(prop.table(table(dados$Class)))
 
-cat("\nProporção da classe no treino:\n")
-print(prop.table(table(treino$Class)))
+for (nome_split in names(splits)) {
+  split_atual <- splits[[nome_split]]
 
-cat("\nProporção da classe no teste:\n")
-print(prop.table(table(teste$Class)))
+  cat("\nProporcao treino no split", nome_split, ":\n")
+  print(prop.table(table(split_atual$treino$Class)))
 
-# ------------------------------------------------------------------------------
-# BLOCO 7 — Salvar objetos
-# ------------------------------------------------------------------------------
-saveRDS(dados,  "objetos/dados_preprocessados.rds")
-saveRDS(treino, "objetos/treino.rds")
-saveRDS(teste,  "objetos/teste.rds")
+  cat("\nProporcao teste no split", nome_split, ":\n")
+  print(prop.table(table(split_atual$teste$Class)))
+}
 
-message("02_preprocessamento.R concluído com sucesso.")
+message("02_preprocessamento.R concluido com sucesso.")

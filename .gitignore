@@ -1,4 +1,9 @@
-.Rproj.user
+.Rproj.user/
 .Rhistory
 .RData
 .Ruserdata
+.RDataTmp*
+
+objetos/
+resultados/
+figuras/
