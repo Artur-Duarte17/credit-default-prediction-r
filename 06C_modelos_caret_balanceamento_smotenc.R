@@ -45,6 +45,79 @@ print(finalistas_modelos)
 resultados <- list()
 contador <- 1
 
+treinar_cenario_balanceamento_caret <- function(
+  config_atual,
+  formula_sub,
+  dados_sub,
+  folds_confirmacao,
+  usar_smotenc
+) {
+  cenario <- if (isTRUE(usar_smotenc)) "Com_SMOTENC" else "Sem_balanceamento"
+
+  resultado <- tryCatch(
+    {
+      modelo_treinado <- treinar_modelo_caret(
+        modelo = config_atual$Modelo[1],
+        formula_modelo = formula_sub,
+        dados_sub = dados_sub,
+        usar_smotenc = usar_smotenc,
+        fase_validacao = "confirmacao",
+        folds_cv = folds_confirmacao
+      )
+
+      extrair_melhor_resultado_caret(
+        modelo_treinado,
+        metadata = list(
+          Subconjunto = config_atual$Subconjunto[1],
+          TopN = config_atual$TopN[1],
+          Modelo = config_atual$Modelo[1],
+          Cenario = cenario,
+          Variaveis = config_atual$Variaveis[1],
+          Usa_SMOTENC = usar_smotenc
+        )
+      ) %>%
+        adicionar_contexto_validacao(
+          fase = "confirmacao",
+          folds_cv = folds_confirmacao
+        )
+    },
+    error = function(e) {
+      message(
+        sprintf(
+          "Ignorando %s | %s | %s: %s",
+          config_atual$Modelo[1],
+          config_atual$Subconjunto[1],
+          cenario,
+          conditionMessage(e)
+        )
+      )
+      NULL
+    }
+  )
+
+  if (is.null(resultado)) {
+    return(NULL)
+  }
+
+  metricas_principais <- intersect(c("ROC", "F1", "GMean"), names(resultado))
+  possui_metrica_valida <- length(metricas_principais) > 0 &&
+    any(vapply(resultado[metricas_principais], function(coluna) any(is.finite(coluna)), logical(1)))
+
+  if (!possui_metrica_valida) {
+    message(
+      sprintf(
+        "Ignorando %s | %s | %s: sem metricas validas apos o treino.",
+        config_atual$Modelo[1],
+        config_atual$Subconjunto[1],
+        cenario
+      )
+    )
+    return(NULL)
+  }
+
+  resultado
+}
+
 # ------------------------------------------------------------------------------
 # BLOCO 2 - Confirmacao do balanceamento nos finalistas
 # ------------------------------------------------------------------------------
@@ -59,66 +132,60 @@ for (i in seq_len(nrow(finalistas_modelos))) {
   cat("Variaveis:", paste(vars_sub, collapse = ", "), "\n")
   cat("====================================================\n")
 
-  modelo_base <- treinar_modelo_caret(
-    modelo = config_atual$Modelo[1],
-    formula_modelo = formula_sub,
+  resultado_base <- treinar_cenario_balanceamento_caret(
+    config_atual = config_atual,
+    formula_sub = formula_sub,
     dados_sub = dados_sub,
-    usar_smotenc = FALSE,
-    fase_validacao = "confirmacao",
-    folds_cv = folds_confirmacao
+    folds_confirmacao = folds_confirmacao,
+    usar_smotenc = FALSE
   )
 
-  resultados[[contador]] <- extrair_melhor_resultado_caret(
-    modelo_base,
-    metadata = list(
-      Subconjunto = config_atual$Subconjunto[1],
-      TopN = config_atual$TopN[1],
-      Modelo = config_atual$Modelo[1],
-      Cenario = "Sem_balanceamento",
-      Variaveis = config_atual$Variaveis[1],
-      Usa_SMOTENC = FALSE
-    )
-  ) %>%
-    adicionar_contexto_validacao(
-      fase = "confirmacao",
-      folds_cv = folds_confirmacao
-    )
-  contador <- contador + 1
+  if (!is.null(resultado_base)) {
+    resultados[[contador]] <- resultado_base
+    contador <- contador + 1
+  }
 
-  modelo_smotenc <- treinar_modelo_caret(
-    modelo = config_atual$Modelo[1],
-    formula_modelo = formula_sub,
+  resultado_smotenc <- treinar_cenario_balanceamento_caret(
+    config_atual = config_atual,
+    formula_sub = formula_sub,
     dados_sub = dados_sub,
-    usar_smotenc = TRUE,
-    fase_validacao = "confirmacao",
-    folds_cv = folds_confirmacao
+    folds_confirmacao = folds_confirmacao,
+    usar_smotenc = TRUE
   )
 
-  resultados[[contador]] <- extrair_melhor_resultado_caret(
-    modelo_smotenc,
-    metadata = list(
-      Subconjunto = config_atual$Subconjunto[1],
-      TopN = config_atual$TopN[1],
-      Modelo = config_atual$Modelo[1],
-      Cenario = "Com_SMOTENC",
-      Variaveis = config_atual$Variaveis[1],
-      Usa_SMOTENC = TRUE
-    )
-  ) %>%
-    adicionar_contexto_validacao(
-      fase = "confirmacao",
-      folds_cv = folds_confirmacao
-    )
-  contador <- contador + 1
+  if (!is.null(resultado_smotenc)) {
+    resultados[[contador]] <- resultado_smotenc
+    contador <- contador + 1
+  }
 }
 
-tabela_balanceamento <- dplyr::bind_rows(resultados) %>%
-  dplyr::select(
-    Subconjunto, TopN, Modelo, Cenario,
-    ROC, Sens, Spec, Precision, F1, GMean,
-    dplyr::everything()
-  ) %>%
-  dplyr::arrange(Modelo, Subconjunto, desc(ROC), desc(F1), desc(GMean))
+if (length(resultados) == 0) {
+  tabela_balanceamento <- tibble::tibble(
+    Subconjunto = character(),
+    TopN = integer(),
+    Modelo = character(),
+    Cenario = character(),
+    ROC = double(),
+    Sens = double(),
+    Spec = double(),
+    Precision = double(),
+    F1 = double(),
+    GMean = double(),
+    Variaveis = character(),
+    Usa_SMOTENC = logical(),
+    Fase_Protocolo = character(),
+    CV_Folds = double(),
+    CV_Repeats = double()
+  )
+} else {
+  tabela_balanceamento <- dplyr::bind_rows(resultados) %>%
+    dplyr::select(
+      Subconjunto, TopN, Modelo, Cenario,
+      ROC, Sens, Spec, Precision, F1, GMean,
+      dplyr::everything()
+    ) %>%
+    dplyr::arrange(Modelo, Subconjunto, desc(ROC), desc(F1), desc(GMean))
+}
 
 print(tabela_balanceamento)
 

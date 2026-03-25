@@ -74,7 +74,7 @@ configs_base <- selecionar_melhor_cenario_por_modelo(tabela_benchmark) %>%
 
 if (!is.null(tabela_balanceamento)) {
   configs_smotenc <- tabela_balanceamento %>%
-    dplyr::filter(Cenario == "Com_SMOTENC") %>%
+    dplyr::filter(Cenario == "Com_SMOTENC", is.finite(ROC)) %>%
     selecionar_melhor_cenario_por_modelo() %>%
     dplyr::mutate(
       Usa_SMOTENC = TRUE,
