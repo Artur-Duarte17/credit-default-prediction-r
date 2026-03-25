@@ -95,12 +95,20 @@ main <- function() {
 
   if (isTRUE(opcoes_execucao$salvar_log)) {
     dir.create("logs", showWarnings = FALSE, recursive = TRUE)
-    log_file <- file.path("logs", paste0("pipeline_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".log"))
-    sink(log_file, split = TRUE)
-    sink(log_file, type = "message", append = TRUE)
+    log_file <- file.path(
+      "logs",
+      paste0("pipeline_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".log")
+    )
+    
+    log_con <- file(log_file, open = "wt")
+    
+    sink(log_con, split = TRUE)
+    sink(log_con, type = "message")
+    
     on.exit({
       sink(type = "message")
       sink()
+      close(log_con)
     }, add = TRUE)
   }
 
