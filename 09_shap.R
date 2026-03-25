@@ -48,6 +48,14 @@ ajuste_final <- treinar_prever_modelo_final(
   teste_df = teste
 )
 
+normalizar_entrada_shap <- function(x) {
+  if (is.matrix(x)) {
+    return(as.matrix(x))
+  }
+
+  as.data.frame(x)
+}
+
 if (config_modelo$Modelo[1] == "XGBoost") {
   x_treino_bg <- ajuste_final$x_treino
   x_teste_full <- ajuste_final$x_teste
@@ -69,6 +77,9 @@ if (config_modelo$Modelo[1] == "XGBoost") {
   }
 }
 
+x_treino_bg <- normalizar_entrada_shap(x_treino_bg)
+x_teste_full <- normalizar_entrada_shap(x_teste_full)
+
 # ------------------------------------------------------------------------------
 # BLOCO 3 - Definir amostra para SHAP
 # ------------------------------------------------------------------------------
@@ -77,6 +88,7 @@ n_amostra_shap <- min(200, nrow(x_teste_full))
 ids_amostra <- sample(seq_len(nrow(x_teste_full)), size = n_amostra_shap)
 
 x_teste_shap <- x_teste_full[ids_amostra, , drop = FALSE]
+x_teste_shap <- normalizar_entrada_shap(x_teste_shap)
 y_teste_shap <- ajuste_final$teste$Class[ids_amostra]
 threshold_final <- melhor_cenario_teste$Threshold[1]
 
