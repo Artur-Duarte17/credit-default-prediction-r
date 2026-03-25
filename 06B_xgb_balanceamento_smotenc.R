@@ -29,11 +29,6 @@ folds_confirmacao <- criar_folds_estratificados(
   y = treino$Class,
   fase = "confirmacao"
 )
-grid_xgb_confirmacao <- obter_grid_modelo_fase(
-  modelo = "XGBoost",
-  dados_sub = treino[, c(setdiff(names(treino), "Class")[1], "Class"), drop = FALSE],
-  fase = "confirmacao"
-)
 
 print(finalistas_xgb)
 
@@ -48,6 +43,7 @@ for (i in seq_len(nrow(finalistas_xgb))) {
   vars_sub <- parse_variaveis(config_atual$Variaveis[1])
   dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
   formula_sub <- montar_formula(vars_sub)
+  grid_xgb_atual <- obter_grid_modelo_config(config_atual)
 
   cat("\n====================================================\n")
   cat("Confirmacao de balanceamento -", config_atual$Subconjunto[1], "\n")
@@ -57,7 +53,7 @@ for (i in seq_len(nrow(finalistas_xgb))) {
   tabela_base <- avaliar_xgb_cv(
     dados = dados_sub,
     folds = folds_confirmacao,
-    grid_xgb = grid_xgb_confirmacao,
+    grid_xgb = grid_xgb_atual,
     aplicar_smotenc = FALSE,
     formula_modelo = formula_sub
   )
@@ -82,7 +78,7 @@ for (i in seq_len(nrow(finalistas_xgb))) {
   tabela_smotenc <- avaliar_xgb_cv(
     dados = dados_sub,
     folds = folds_confirmacao,
-    grid_xgb = grid_xgb_confirmacao,
+    grid_xgb = grid_xgb_atual,
     aplicar_smotenc = TRUE,
     formula_modelo = formula_sub
   )

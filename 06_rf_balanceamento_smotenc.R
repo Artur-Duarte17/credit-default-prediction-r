@@ -43,6 +43,7 @@ for (i in seq_len(nrow(finalistas_rf))) {
   vars_sub <- parse_variaveis(config_atual$Variaveis[1])
   dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
   formula_sub <- montar_formula(vars_sub)
+  tune_grid_atual <- obter_grid_modelo_config(config_atual)
 
   cat("\n====================================================\n")
   cat("Confirmacao de balanceamento -", config_atual$Subconjunto[1], "\n")
@@ -53,6 +54,7 @@ for (i in seq_len(nrow(finalistas_rf))) {
     modelo = "RF",
     formula_modelo = formula_sub,
     dados_sub = dados_sub,
+    tune_grid = tune_grid_atual,
     usar_smotenc = FALSE,
     fase_validacao = "confirmacao",
     folds_cv = folds_confirmacao
@@ -79,6 +81,7 @@ for (i in seq_len(nrow(finalistas_rf))) {
     modelo = "RF",
     formula_modelo = formula_sub,
     dados_sub = dados_sub,
+    tune_grid = tune_grid_atual,
     usar_smotenc = TRUE,
     fase_validacao = "confirmacao",
     folds_cv = folds_confirmacao

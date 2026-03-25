@@ -369,6 +369,166 @@ CUSTO_FALSO_NEGATIVO <- 5000
 CUSTO_FALSO_POSITIVO <- 1000
 BENEFICIO_VERDADEIRO_POSITIVO <- 5000
 
+ATIVAR_PARALELISMO <- TRUE
+N_CORES_LOGICOS <- parallel::detectCores(logical = TRUE)
+N_CORES_FISICOS <- parallel::detectCores(logical = FALSE)
+
+if (!is.finite(N_CORES_LOGICOS) || is.na(N_CORES_LOGICOS) || N_CORES_LOGICOS < 1) {
+  N_CORES_LOGICOS <- 1L
+}
+
+if (!is.finite(N_CORES_FISICOS) || is.na(N_CORES_FISICOS) || N_CORES_FISICOS < 1) {
+  N_CORES_FISICOS <- N_CORES_LOGICOS
+}
+
+N_WORKERS_CARET <- if (isTRUE(ATIVAR_PARALELISMO) && N_CORES_LOGICOS > 2) {
+  as.integer(N_CORES_LOGICOS - 1L)
+} else {
+  1L
+}
+
+N_THREADS_XGBOOST <- if (isTRUE(ATIVAR_PARALELISMO) && N_CORES_LOGICOS > 1) {
+  as.integer(N_CORES_LOGICOS - 1L)
+} else {
+  1L
+}
+
+obter_configuracao_paralela <- function() {
+  getOption("projeto_credito.parallel")
+}
+
+usar_backend_paralelo <- function() {
+  config <- obter_configuracao_paralela()
+
+  if (is.null(config)) {
+    return(FALSE)
+  }
+
+  isTRUE(config$ativo) && isTRUE(config$workers > 1)
+}
+
+obter_nthread_xgboost <- function() {
+  config <- obter_configuracao_paralela()
+
+  if (is.null(config) || is.null(config$xgb_nthread) || !is.finite(config$xgb_nthread)) {
+    return(1L)
+  }
+
+  as.integer(config$xgb_nthread)
+}
+
+encerrar_backend_paralelo <- function() {
+  config <- obter_configuracao_paralela()
+
+  if (!is.null(config$cluster) && inherits(config$cluster, "cluster")) {
+    try(parallel::stopCluster(config$cluster), silent = TRUE)
+  }
+
+  foreach::registerDoSEQ()
+  options(projeto_credito.parallel = NULL)
+
+  invisible(NULL)
+}
+
+configurar_backend_paralelo <- function() {
+  config_atual <- obter_configuracao_paralela()
+
+  if (!is.null(config_atual$cluster) && inherits(config_atual$cluster, "cluster")) {
+    return(invisible(config_atual))
+  }
+
+  if (!isTRUE(ATIVAR_PARALELISMO) || N_WORKERS_CARET <= 1) {
+    foreach::registerDoSEQ()
+
+    config_atual <- list(
+      ativo = FALSE,
+      total_cores = as.integer(N_CORES_LOGICOS),
+      physical_cores = as.integer(N_CORES_FISICOS),
+      workers = 1L,
+      xgb_nthread = 1L,
+      cluster = NULL
+    )
+
+    options(projeto_credito.parallel = config_atual)
+    return(invisible(config_atual))
+  }
+
+  cluster <- parallel::makePSOCKcluster(N_WORKERS_CARET)
+  parallel::clusterSetRNGStream(cluster, iseed = SEED_PROJETO)
+  project_root <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+
+  parallel::clusterCall(
+    cluster,
+    function(
+      project_root,
+      smotenc_over_ratio,
+      smotenc_neighbors,
+      custo_falso_negativo,
+      custo_falso_positivo,
+      beneficio_verdadeiro_positivo
+    ) {
+      setwd(project_root)
+
+      suppressPackageStartupMessages({
+        library(caret)
+        library(randomForest)
+        library(e1071)
+        library(kernlab)
+        library(xgboost)
+        library(nnet)
+        library(glmnet)
+        library(recipes)
+        library(themis)
+        library(pROC)
+        library(PRROC)
+        library(MLmetrics)
+      })
+
+      assign("SMOTENC_OVER_RATIO", smotenc_over_ratio, envir = .GlobalEnv)
+      assign("SMOTENC_NEIGHBORS", smotenc_neighbors, envir = .GlobalEnv)
+      assign("CUSTO_FALSO_NEGATIVO", custo_falso_negativo, envir = .GlobalEnv)
+      assign("CUSTO_FALSO_POSITIVO", custo_falso_positivo, envir = .GlobalEnv)
+      assign("BENEFICIO_VERDADEIRO_POSITIVO", beneficio_verdadeiro_positivo, envir = .GlobalEnv)
+
+      source(file.path(project_root, "R", "funcoes_metricas.R"), local = .GlobalEnv)
+      source(file.path(project_root, "R", "funcoes_preprocessamento.R"), local = .GlobalEnv)
+
+      NULL
+    },
+    project_root = project_root,
+    smotenc_over_ratio = SMOTENC_OVER_RATIO,
+    smotenc_neighbors = SMOTENC_NEIGHBORS,
+    custo_falso_negativo = CUSTO_FALSO_NEGATIVO,
+    custo_falso_positivo = CUSTO_FALSO_POSITIVO,
+    beneficio_verdadeiro_positivo = BENEFICIO_VERDADEIRO_POSITIVO
+  )
+
+  doParallel::registerDoParallel(cluster)
+
+  config_atual <- list(
+    ativo = TRUE,
+    total_cores = as.integer(N_CORES_LOGICOS),
+    physical_cores = as.integer(N_CORES_FISICOS),
+    workers = as.integer(N_WORKERS_CARET),
+    xgb_nthread = as.integer(N_THREADS_XGBOOST),
+    cluster = cluster
+  )
+
+  options(projeto_credito.parallel = config_atual)
+  invisible(config_atual)
+}
+
 set.seed(SEED_PROJETO)
+
+config_paralela <- configurar_backend_paralelo()
+
+message(
+  sprintf(
+    "Paralelismo configurado | cores logicos: %d | workers caret: %d | nthread xgboost: %d",
+    config_paralela$total_cores,
+    config_paralela$workers,
+    config_paralela$xgb_nthread
+  )
+)
 
 message("00_setup.R carregado com sucesso.")

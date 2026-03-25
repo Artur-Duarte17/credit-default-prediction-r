@@ -29,7 +29,7 @@ controle_cv <- caret::trainControl(
   repeats = CV_REPEATS_PADRAO,
   classProbs = TRUE,
   summaryFunction = caret::twoClassSummary,
-  allowParallel = FALSE
+  allowParallel = usar_backend_paralelo()
 )
 
 # ------------------------------------------------------------------------------

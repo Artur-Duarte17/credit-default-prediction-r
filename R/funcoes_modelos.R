@@ -99,7 +99,7 @@ controle_cv_padrao <- function(
     classProbs = TRUE,
     summaryFunction = metricas_binarias,
     savePredictions = if (save_predictions) "final" else FALSE,
-    allowParallel = FALSE
+    allowParallel = usar_backend_paralelo()
   )
 
   if (repeats > 1) {
@@ -119,7 +119,7 @@ controle_final_sem_cv <- function() {
     method = "none",
     classProbs = TRUE,
     summaryFunction = metricas_binarias,
-    allowParallel = FALSE
+    allowParallel = usar_backend_paralelo()
   )
 }
 
@@ -697,7 +697,8 @@ avaliar_xgb_cv <- function(dados, folds, grid_xgb, aplicar_smotenc = FALSE, form
           gamma = params_grid$gamma,
           colsample_bytree = params_grid$colsample_bytree,
           min_child_weight = params_grid$min_child_weight,
-          subsample = params_grid$subsample
+          subsample = params_grid$subsample,
+          nthread = obter_nthread_xgboost()
         ),
         data = dtrain,
         nrounds = params_grid$nrounds,
@@ -792,7 +793,8 @@ avaliar_xgb_oof <- function(dados, folds, grid_xgb, aplicar_smotenc = FALSE, for
           gamma = params_grid$gamma,
           colsample_bytree = params_grid$colsample_bytree,
           min_child_weight = params_grid$min_child_weight,
-          subsample = params_grid$subsample
+          subsample = params_grid$subsample,
+          nthread = obter_nthread_xgboost()
         ),
         data = dtrain,
         nrounds = params_grid$nrounds,
@@ -856,7 +858,8 @@ treinar_prever_xgb <- function(treino_df, teste_df, config_modelo) {
       gamma = as.numeric(config_modelo$gamma[1]),
       colsample_bytree = as.numeric(config_modelo$colsample_bytree[1]),
       min_child_weight = as.numeric(config_modelo$min_child_weight[1]),
-      subsample = as.numeric(config_modelo$subsample[1])
+      subsample = as.numeric(config_modelo$subsample[1]),
+      nthread = obter_nthread_xgboost()
     ),
     data = dtrain,
     nrounds = as.integer(config_modelo$nrounds[1]),

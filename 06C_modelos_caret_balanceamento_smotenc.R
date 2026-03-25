@@ -50,7 +50,8 @@ treinar_cenario_balanceamento_caret <- function(
   formula_sub,
   dados_sub,
   folds_confirmacao,
-  usar_smotenc
+  usar_smotenc,
+  tune_grid_atual
 ) {
   cenario <- if (isTRUE(usar_smotenc)) "Com_SMOTENC" else "Sem_balanceamento"
 
@@ -60,6 +61,7 @@ treinar_cenario_balanceamento_caret <- function(
         modelo = config_atual$Modelo[1],
         formula_modelo = formula_sub,
         dados_sub = dados_sub,
+        tune_grid = tune_grid_atual,
         usar_smotenc = usar_smotenc,
         fase_validacao = "confirmacao",
         folds_cv = folds_confirmacao
@@ -126,6 +128,7 @@ for (i in seq_len(nrow(finalistas_modelos))) {
   vars_sub <- parse_variaveis(config_atual$Variaveis[1])
   dados_sub <- treino[, c(vars_sub, "Class"), drop = FALSE]
   formula_sub <- montar_formula(vars_sub)
+  tune_grid_atual <- obter_grid_modelo_config(config_atual)
 
   cat("\n====================================================\n")
   cat("Confirmacao de balanceamento -", config_atual$Modelo[1], "-", config_atual$Subconjunto[1], "\n")
@@ -137,7 +140,8 @@ for (i in seq_len(nrow(finalistas_modelos))) {
     formula_sub = formula_sub,
     dados_sub = dados_sub,
     folds_confirmacao = folds_confirmacao,
-    usar_smotenc = FALSE
+    usar_smotenc = FALSE,
+    tune_grid_atual = tune_grid_atual
   )
 
   if (!is.null(resultado_base)) {
@@ -150,7 +154,8 @@ for (i in seq_len(nrow(finalistas_modelos))) {
     formula_sub = formula_sub,
     dados_sub = dados_sub,
     folds_confirmacao = folds_confirmacao,
-    usar_smotenc = TRUE
+    usar_smotenc = TRUE,
+    tune_grid_atual = tune_grid_atual
   )
 
   if (!is.null(resultado_smotenc)) {
